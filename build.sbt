@@ -7,8 +7,8 @@ organization := "com.github.mgabr"
 scalaVersion := "2.11.8"
 val scalaMajorMinorVersion = "2.11"
 
-libraryDependencies += "org.apache.spark" %% "spark-core" % "2.3.0" % "provided"
-libraryDependencies += "org.apache.spark" %% "spark-mllib" % "2.3.0" % "provided"
+libraryDependencies += "org.apache.spark" %% "spark-core" % "2.4.0" % "provided"
+libraryDependencies += "org.apache.spark" %% "spark-mllib" % "2.4.0" % "provided"
 
 // use this instead of the github dependency for easier local development if you are modifying glint
 // libraryDependencies += "com.github.mgabr" %% "glint" % "0.2-SNAPSHOT"
@@ -17,9 +17,8 @@ lazy val glint = RootProject(uri("https://github.com/MGabr/glint.git#0.2-fmpair"
 
 // Integration tests
 
-libraryDependencies += "org.scalactic" %% "scalactic" % "3.0.1" % "it"
-libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.1" % "it"
-
+libraryDependencies += "org.scalactic" %% "scalactic" % "3.0.8" % "it"
+libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "it"
 
 // Lower Aeron buffer to prevent space on /dev/shm running out during local or CI tests
 
@@ -41,7 +40,7 @@ fullClasspath in (IntegrationTest, assembly) := {
 
 val sparkParameterServerArg = s"spark -c target/scala-$scalaMajorMinorVersion/it-classes/separate-glint.conf"
 val sparkParameterServerMain = "glint.Main"
-val sparkTestsMain = "org.apache.spark.ml.feature.Main"
+val sparkTestsMain = "org.apache.spark.ml.recommendation.Main"
 
 import scala.sys.process._
 
