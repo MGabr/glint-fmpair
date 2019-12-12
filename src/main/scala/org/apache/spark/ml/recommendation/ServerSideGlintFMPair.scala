@@ -557,7 +557,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * Sample negative items with probabilities proportional to the exponential popularity distribution from LambdaFM,
    * accepting all items as negative items. Uses inverse transformation sampling from truncated exponential distribution
    *
-   * @param itemsByCount The item indices ordered by descending popularity / occurrence count TODO: 0
+   * @param itemsByCount The item indices ordered by descending popularity / occurrence count
    * @param rho The rho parameter for the exponential distribution
    * @return A sampler function creating a sequence of sampled interactions
    */
@@ -606,7 +606,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    *
    * @param userSamplings The mapping of user ids to their set of sampling ids
    * @param item2sampling The mapping of item ids to their sampling id
-   * @param itemsByCount The item indices ordered by descending popularity / occurrence count TODO: 0
+   * @param itemsByCount The item indices ordered by descending popularity / occurrence count
    * @param rho The rho parameter for the exponential distribution
    * @return A sampler function creating a sequence of sampled interactions
    */

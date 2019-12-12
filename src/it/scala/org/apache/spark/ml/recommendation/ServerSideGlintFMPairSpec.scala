@@ -50,7 +50,6 @@ object ServerSideGlintFMPairSpec {
       ParamPair(itemEncoderModel.inputCols, ctxitemCols),
       ParamPair(itemEncoderModel.outputCols, ctxitemCols.map(_ + "_encoded")),
       ParamPair(itemEncoderModel.dropLast, true)))  // missing user features are simply ignored, no problem for ranking
-    // TODO
 
     (toFeatures(data, userEncoderModel, itemEncoderModel, ctxitemEncoderModel),
       userEncoderModel, itemEncoderModel, ctxitemEncoderModel)
@@ -93,8 +92,8 @@ object ServerSideGlintFMPairSpec {
   }
 }
 
-class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll
-  with Matchers with Inspectors {
+class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Matchers
+  with Inspectors {
 
   /**
    * Path to small preprocessed subsets of the AOTM-2011 dataset.
@@ -139,12 +138,17 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
     super.beforeAll()
 
     val fs = FileSystem.get(new Configuration())
-    FileUtil.fullyDelete(fs, fs.getHomeDirectory)
+    fs.delete(fs.getHomeDirectory, true)
     fs.copyFromLocalFile(new Path(traindataPath), new Path(traindataPath))
     fs.copyFromLocalFile(new Path(testdataPath), new Path(testdataPath))
   }
 
   override def afterAll(): Unit = {
+    val fs = FileSystem.get(new Configuration())
+    fs.delete(new Path(modelPath), true)
+    fs.delete(new Path(expModelPath), true)
+    fs.delete(new Path(separateGlintModelPath), true)
+
     s.stop()
   }
 
