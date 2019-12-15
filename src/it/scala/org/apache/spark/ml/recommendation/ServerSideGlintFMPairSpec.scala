@@ -343,7 +343,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be >= 0.32
-      ndcg should be > 0.26
+      ndcg should be > 0.25
     } finally {
       model.stop()
     }

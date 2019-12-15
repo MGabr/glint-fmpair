@@ -865,7 +865,7 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
       val savedLinearFuture = instance.linear.save(path + "/linear", sc.hadoopConfiguration)
       val savedFactorsFuture = instance.factors.save(path + "/factors", sc.hadoopConfiguration)
       sc.parallelize(instance.bcItemFeatures.value, 1).saveAsObjectFile(path + "/itemfeatures")
-      Await.ready(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 3 minutes)  // timedout
+      Await.ready(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 5 minutes)  // timedout
     }
   }
 
