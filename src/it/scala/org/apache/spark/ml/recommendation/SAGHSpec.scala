@@ -82,7 +82,7 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
     model.getItemCol shouldBe "itemid"
   }
 
-  it should "have a high enough hit rate for the top 50 recommendations" in {
+  it should "have a high enough hit rate and ndcg for the top 50 recommendations" in {
     if (!modelCreated) {
       pending
     }
@@ -92,14 +92,20 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
 
     val model = SAGHModel.load(modelPath)
 
-    val hits = model.recommendForUserSubset(testquerydata, 50)
+    val dcgs = model.recommendForUserSubset(testquerydata, 50)
       .join(testdata, "userid")
       .rdd
       .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-      .map { case (item, recs) => recs.map(_.getAs[Int]("itemid")).contains(item) }
-      .collect()
+      .map { case (item, recs) =>
+        recs.zipWithIndex.map { case (rec, i) =>
+          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+        }.sum
+      }.collect()
 
-    val hitRate = hits.count(t => t).toDouble / hits.length
+    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+    val ndcg = dcgs.sum / dcgs.length
+
     hitRate should be >= 0.1
+    ndcg should be > 0.044
   }
 }
