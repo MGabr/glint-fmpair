@@ -106,6 +106,6 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
     val ndcg = dcgs.sum / dcgs.length
 
     hitRate should be >= 0.1
-    ndcg should be > 0.044
+    ndcg should be > 0.04
   }
 }
