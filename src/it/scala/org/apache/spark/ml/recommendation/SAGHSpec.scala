@@ -31,6 +31,7 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
    * where the last track occurred already in the train dataset.
    */
   private val traindataPath = "AOTM-2011-small-train.csv"
+  private val testquerydataPath = "AOTM-2011-small-test-queryseeds.csv"
   private val testdataPath = "AOTM-2011-small-test.csv"
 
   /**
@@ -51,6 +52,7 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
     fs.delete(fs.getHomeDirectory, true)
     fs.copyFromLocalFile(new Path(traindataPath), new Path(traindataPath))
     fs.copyFromLocalFile(new Path(testdataPath), new Path(testdataPath))
+    fs.copyFromLocalFile(new Path(testquerydataPath), new Path(testquerydataPath))
   }
 
   override def afterAll(): Unit = {
@@ -80,13 +82,13 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
     model.getItemCol shouldBe "itemid"
   }
 
-  it should "have a high hit rate for the top 50 recommendations" in {
+  it should "have a high enough hit rate for the top 50 recommendations" in {
     if (!modelCreated) {
       pending
     }
 
     val testdata = SAGHSpec.load(s, testdataPath)
-    val testquerydata = testdata.drop("itemid")
+    val testquerydata = SAGHSpec.load(s, testquerydataPath)
 
     val model = SAGHModel.load(modelPath)
 
@@ -98,6 +100,6 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
       .collect()
 
     val hitRate = hits.count(t => t).toDouble / hits.length
-    hitRate should be > 0.9  // wow
+    hitRate should be >= 0.1
   }
 }

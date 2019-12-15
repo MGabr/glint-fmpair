@@ -6,7 +6,7 @@ import org.apache.spark.ml.param.shared.HasPredictionCol
 import org.apache.spark.ml.util.{DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, SchemaUtils}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{DataFrame, Dataset}
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.functions.{row_number, _}
 import org.apache.spark.sql.types.{FloatType, IntegerType, StructType}
 
 private[recommendation] trait PopRankParams extends Params with HasPredictionCol {
@@ -51,8 +51,11 @@ class PopRank(override val uid: String) extends Estimator[PopRankModel] with Pop
 
   override def fit(dataset: Dataset[_]): PopRankModel = {
     val itemCounts = dataset.select(getItemCol, getUserCol)
+      .distinct()
       .groupBy(getItemCol)
       .agg(count(getUserCol).as("score"))
+      .orderBy(desc("score"), asc("itemid"))
+
     copyValues(new PopRankModel(this.uid, itemCounts).setParent(this))
   }
 
@@ -96,13 +99,14 @@ class PopRankModel private[ml](override val uid: String, val itemCounts: DataFra
    */
   def recommendForUserSubset(dataset: Dataset[_], numItems: Int, explode: Boolean = false): DataFrame = {
 
-    val window = Window.partitionBy(getUserCol).orderBy(desc("score"))
+    // get top numItems, limit(numItems) not working correctly
+    val window = Window.orderBy(desc("score"), asc("itemid"))
+    val topItemCountsDf = itemCounts
+      .select(col(getItemCol), col("score"), row_number().over(window).as("rowno"))
+      .filter(col("rowno").leq(numItems))
 
     val recommendDf = dataset.select(getUserCol).distinct()
-      // get top numItems of same artists
-      .crossJoin(itemCounts.limit(numItems))
-      .select(col(getUserCol), col(getItemCol), col("score"), row_number().over(window).as("rowno"))
-      .filter(col("rowno").leq(numItems))
+      .crossJoin(topItemCountsDf)
       .select(getUserCol, "score", getItemCol)
 
     if (explode) {

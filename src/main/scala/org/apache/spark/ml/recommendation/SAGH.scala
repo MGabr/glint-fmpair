@@ -66,8 +66,11 @@ class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParam
 
   override def fit(dataset: Dataset[_]): SAGHModel = {
     val itemCounts = dataset.select(getItemCol, getArtistCol, getUserCol)
-      .groupBy(getItemCol)
-      .agg(first(getArtistCol).as(getArtistCol), count(getUserCol).as("score"))
+      .distinct()
+      .groupBy(getItemCol, getArtistCol)
+      .agg(count(getUserCol).as("score"))
+      .orderBy(desc("score"), asc("itemid"))
+
     copyValues(new SAGHModel(this.uid, itemCounts).setParent(this))
   }
 
@@ -112,8 +115,7 @@ class SAGHModel private[ml](override val uid: String, val itemCounts: DataFrame)
    */
   def recommendForUserSubset(dataset: Dataset[_], numItems: Int, explode: Boolean = false): DataFrame = {
 
-    val window = Window.partitionBy(getUserCol).orderBy(desc("score"))
-
+    val window = Window.partitionBy(getUserCol).orderBy(desc("score"), asc("itemid"))
     val recommendDf = dataset.select(getUserCol, getArtistCol).distinct()
       // get top numItems of same artists
       .join(itemCounts, getArtistCol)

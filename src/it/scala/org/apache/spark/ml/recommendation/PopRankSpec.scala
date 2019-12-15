@@ -80,7 +80,7 @@ class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with
     model.getItemCol shouldBe "itemid"
   }
 
-  it should "have a minimal baseline hit rate for the top 50 recommendations" in {
+  it should "have a high enough hit rate for the top 50 recommendations" in {
     if (!modelCreated) {
       pending
     }
@@ -98,6 +98,6 @@ class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with
       .collect()
 
     val hitRate = hits.count(t => t).toDouble / hits.length
-    hitRate should be > 0.003
+    hitRate should be > 0.33
   }
 }
