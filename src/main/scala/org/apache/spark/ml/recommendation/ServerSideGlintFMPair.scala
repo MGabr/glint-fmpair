@@ -401,7 +401,7 @@ class ServerSideGlintFMPair(override val uid: String)
         @transient
         implicit val ec = ExecutionContext.Implicits.global
 
-        val interactions = iter.toSeq
+        val interactions = iter.toArray
 
         val epochs = getMaxIter
         val batchSize = getBatchSize
@@ -434,15 +434,15 @@ class ServerSideGlintFMPair(override val uid: String)
         val fitFinishedFuture = (0 until epochs).iterator
           .flatMap { epoch =>
             val random = new Random(seed + TaskContext.getPartitionId() + epoch)
-            random
-              .shuffle(interactions)  // sample positive users, contexts and items
-              .sliding(batchSize, batchSize)  // group into batches
+            ServerSideGlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
+            interactions
+              .grouped(batchSize)  // group into batches
               .map(i => sample(random, i))  // sample negative items
 
           }.map {
             // add dummy non-acceptance matrix if necessary
-            case (batch: Seq[SampledInteraction], na: DenseMatrix[Float]) => (batch, na)
-            case batch: Seq[SampledInteraction] => (batch, DenseMatrix.zeros[Float](1, 1))
+            case (batch: Array[SampledInteraction], na: DenseMatrix[Float]) => (batch, na)
+            case batch: Array[SampledInteraction] => (batch, DenseMatrix.zeros[Float](1, 1))
 
           }.map { case (batch, na) =>
             // lookup features of sampled items
@@ -453,17 +453,16 @@ class ServerSideGlintFMPair(override val uid: String)
 
           }.map { case (batch, na) =>
             // convert features to the arrays required by the parameter servers
-            val iUser = batch.map(_.userctxFeatures.indices).toArray
-            val wUser = batch.map(_.userctxFeatures.values.map(_.toFloat)).toArray
-            val iItem = batch.map(i => i.positemFeatures.indices ++ i.negitemFeatures.indices).toArray
+            val iUser = batch.map(_.userctxFeatures.indices)
+            val wUser = batch.map(_.userctxFeatures.values.map(_.toFloat))
+            val iItem = batch.map(i => i.positemFeatures.indices ++ i.negitemFeatures.indices)
             val wItem = batch.map(i =>
-              i.positemFeatures.values.map(_.toFloat) ++ i.negitemFeatures.values.map(v => (-v).toFloat)).toArray
+              i.positemFeatures.values.map(_.toFloat) ++ i.negitemFeatures.values.map(v => (-v).toFloat))
             (iUser, wUser, iItem, wItem, na)
 
           }.foldLeft(Future.successful(Seq(true))) { case (prevBatchFuture, (iUser, wUser, iItem, wItem, na)) =>
             // wait until communication with parameter servers for previous batches is finished
-            // this in combination with the iterator pipeline and foldLeft
-            // allows already processing the next batch while waiting for the parameter server responses
+            // this allows already pre-processing the next batch while waiting for the parameter server responses
             Await.ready(prevBatchFuture, 1 minute)
 
             // communicate with the parameter servers for SGD step
@@ -538,14 +537,30 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
                                      negitemFeatures: SparseVector)
 
   /**
+   * Sample positive items / interactions by shuffling the interactions in-place.
+   * Uses Fisher-Yates shuffle algorithm
+   *
+   * @param random The random number generator to use
+   * @param interactions The interactions to shuffle
+   */
+  private def shuffle(random: Random, interactions: Array[Interaction]): Unit = {
+    cforRange(interactions.length - 1 to 0 by -1)(i => {
+      val j = random.nextInt(i + 1)
+      val tmp = interactions(j)
+      interactions(j) = interactions(i)
+      interactions(i) = tmp
+    })
+  }
+
+  /**
    * Sample negative items uniformly, accepting all items as negative items
    *
    * @param numItems The number of user ids
-   * @return A sampler function creating a sequence of sampled interactions
+   * @return A sampler function creating an array of sampled interactions
    */
-  private def uniformAllSampler(numItems: Int): (Random, Seq[Interaction]) => Seq[SampledInteraction] = {
+  private def uniformAllSampler(numItems: Int): (Random, Array[Interaction]) => Array[SampledInteraction] = {
 
-    def uniformSample(random: Random, interactions: Seq[Interaction]): Seq[SampledInteraction] = {
+    def uniformSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         SampledInteraction(userId, itemId, random.nextInt(numItems), userctxFeatures)
       }
@@ -559,15 +574,15 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    *
    * @param itemsByCount The item indices ordered by descending popularity / occurrence count
    * @param rho The rho parameter for the exponential distribution
-   * @return A sampler function creating a sequence of sampled interactions
+   * @return A sampler function creating an array of sampled interactions
    */
   private def expAllSampler(itemsByCount: Array[Int], rho: Double):
-  (Random, Seq[Interaction]) => Seq[SampledInteraction] = {
+  (Random, Array[Interaction]) => Array[SampledInteraction] = {
 
     val numItems = itemsByCount.length
     val truncationCDF = 1.0 - math.exp(-1.0 / rho)
 
-    def expSample(random: Random, interactions: Seq[Interaction]): Seq[SampledInteraction] = {
+    def expSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         val negitemId = itemsByCount((-numItems * rho * math.log(1 - random.nextDouble() * truncationCDF)).toInt)
         SampledInteraction(userId, itemId, negitemId, userctxFeatures)
@@ -581,14 +596,14 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    *
    * @param userSamplings The mapping of user ids to their set of sampling ids
    * @param item2sampling The mapping of item ids to their sampling id
-   * @return A sampler function creating a sequence of sampled interactions
+   * @return A sampler function creating an array of sampled interactions
    */
   private def uniformSampler(userSamplings: Map[Int, BitSet], item2sampling: Array[Int]):
-  (Random, Seq[Interaction]) => Seq[SampledInteraction] = {
+  (Random, Array[Interaction]) => Array[SampledInteraction] = {
 
     val numItems = item2sampling.length
 
-    def uniformSample(random: Random, interactions: Seq[Interaction]): Seq[SampledInteraction] = {
+    def uniformSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         var negitemId = random.nextInt(numItems)
         while (userSamplings(userId).contains(item2sampling(negitemId))) {
@@ -608,17 +623,17 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @param item2sampling The mapping of item ids to their sampling id
    * @param itemsByCount The item indices ordered by descending popularity / occurrence count
    * @param rho The rho parameter for the exponential distribution
-   * @return A sampler function creating a sequence of sampled interactions
+   * @return A sampler function creating an array of sampled interactions
    */
   private def expSampler(userSamplings: Map[Int, BitSet],
                          item2sampling: Array[Int],
                          itemsByCount: Array[Int],
-                         rho: Double): (Random, Seq[Interaction]) => Seq[SampledInteraction] = {
+                         rho: Double): (Random, Array[Interaction]) => Array[SampledInteraction] = {
 
     val numItems = item2sampling.length
     val truncationCDF = 1.0 - math.exp(-1.0 / rho)
 
-    def expSample(random: Random, interactions: Seq[Interaction]): Seq[SampledInteraction] = {
+    def expSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         var negitemId = itemsByCount((-numItems * rho * math.log(1 - random.nextDouble() * truncationCDF)).toInt)
         while (userSamplings(userId).contains(item2sampling(negitemId))) {
@@ -638,12 +653,12 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @return A sampler function creating an array of sampled interactions and a non-acceptance matrix
    */
   private def crossbatchSampler(userSamplings: Map[Int, BitSet], item2sampling: Array[Int]):
-  (Random, Seq[Interaction]) => (Seq[SampledInteraction], DenseMatrix[Float]) = {
+  (Random, Array[Interaction]) => (Array[SampledInteraction], DenseMatrix[Float]) = {
 
     val numItems = item2sampling.length
 
     def crossbatchSample(random: Random,
-                         interactions: Seq[Interaction]): (Seq[SampledInteraction], DenseMatrix[Float]) = {
+                         interactions: Array[Interaction]): (Array[SampledInteraction], DenseMatrix[Float]) = {
 
       val samples = interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         SampledInteraction(userId, itemId, random.nextInt(numItems), userctxFeatures)
@@ -776,7 +791,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
         val initialBatchFuture = Future.successful((initialScoresMatrix, initialArgMatrix))
 
         bcItemFeatures.value
-          .sliding(batchSize, batchSize)  // group item features into batches
+          .grouped(batchSize)  // group item features into batches
           .zipWithIndex
           .foldLeft(initialBatchFuture) { case (prevBatchFuture, (itemBatch, i)) =>
 
@@ -788,8 +803,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
               1, userMatrix.rows).t
 
             // wait until communication with parameter servers for previous batches is finished
-            // this in combination with the iterator pipeline and foldLeft
-            // allows already processing the next batch while waiting for the parameter server responses
+            // this allows already pre-processing the next batch while waiting for the parameter server responses
             var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
 
             // pull sums of item features of batch

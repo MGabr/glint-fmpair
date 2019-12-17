@@ -27,7 +27,7 @@ Large parts of the actual functionality can be found in the [Glint fork](https:/
 
 ## Build
 
-You can either use the [release jar](https://github.com/MGabr/glint-word2vec/releases) or build the project yourself.
+You can either use the [release jar](https://github.com/MGabr/glint-fmpair/releases) or build the project yourself.
 To build it run:
 
     sbt assembly
@@ -36,9 +36,34 @@ To also execute integration tests run:
 
     sbt it:test
 
-The resulting fat jar contains all dependencies and can be passed to `spark-submit` with `--jar`.
-To use the python bindings zip them and pass them as `--py-files`.
+The resulting fat jar contains all dependencies and can be passed to `spark-submit` with `--jars`.
 
-    cd src/main/python
-    zip ml_glintfmpair.zip ml_glintfmpair.py
+## Usage
 
+The API is similar to the existing ALS implementation of Spark
+with specific parameters for FMPair. The API implements the Spark ML interfaces.
+
+There are two modes in which Glint-FMPair can be run.
+One can either start the parameter servers automatically on some executors in the same Spark application
+or start up a parameter server cluster in a separate Spark application beforehand
+and then specify the IP of the parameter server master to use this cluster.
+The first mode is more convenient but the second mode scales better
+so it is recommended to use a separate parameter server for training.
+The integrated parameter servers can be used for recommendation.
+
+To start parameter servers as separate Spark application run:
+
+    spark-submit --num-executors num-servers --executor-cores server-cores --class glint.Main /path/to/compiled/Glint-FMPair.jar spark
+
+The parameter server master will be started on the driver and the drivers IP will be written to the log output.
+Pass this IP as `parameterServerHost` to connect to these parameter servers from the Glint-FMPair Spark application. 
+
+## Spark parameters
+
+Use a higher number of executor cores (`--executor-cores`) instead of more executors (`--num-executors`).
+Preferably set `--executor-cores` to the number of available virtual cores per machine.
+
+Each of the n parameter servers will require enough executor memory (`--executor-memory`) to store 1/n of the latent factors matrix.
+
+Further, enough memory for storing the mapping array of item indices to item features is required on each executor.
+It is used for sampling negative items and has to be broadcasted and therefore be below the 8GB broadcast size limit of Spark.
