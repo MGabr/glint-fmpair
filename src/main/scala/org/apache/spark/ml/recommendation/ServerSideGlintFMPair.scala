@@ -433,6 +433,11 @@ class ServerSideGlintFMPair(override val uid: String)
         // now the actual fit pipeline
         val fitFinishedFuture = (0 until epochs).iterator
           .flatMap { epoch =>
+
+            if (epoch % 10 == 0) {
+              logInfo(s"Epoch $epoch of $epochs")
+            }
+
             val random = new Random(seed + TaskContext.getPartitionId() + epoch)
             ServerSideGlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
             interactions
@@ -519,19 +524,13 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
 
   override def load(path: String): ServerSideGlintFMPair = super.load(path)
 
-  /**
-   * An interaction from the training instances
-   */
+  /** An interaction from the training instances */
   private case class Interaction(userId: Int, itemId: Int, userctxFeatures: SparseVector)
 
-  /**
-   * An interaction from the training instances, combined with a sampled negative interaction
-   */
+  /** An interaction from the training instances, combined with a sampled negative interaction */
   private case class SampledInteraction(userId: Int, positemId: Int, negitemId: Int, userctxFeatures: SparseVector)
 
-  /**
-   * The features of a positive interaction from the training instances and a negative interaction
-   */
+  /** The features of a positive interaction from the training instances and a negative interaction */
   private case class SampledFeatures(userctxFeatures: SparseVector,
                                      positemFeatures: SparseVector,
                                      negitemFeatures: SparseVector)
@@ -683,7 +682,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Computes the general BPR gradient.
+   * Computes the general BPR gradient
    *
    * @param sLinear The sums of the linear weights per training instance
    * @param fFactors The dot products of the latent factors per training instance
@@ -696,7 +695,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   /**
    * Compute gradients according to crossbatch-BPR loss.
    * This can be computationally expensive (batchSize*batchSize*numDims) as a matrix multiplication is required.
-   * An optimized BLAS library is therefore recommended.
+   * An optimized BLAS library is therefore recommended
    *
    * @param sLinear The sums of the linear weights per training instance
    * @param sFactors The sums of the latent factors per training instance
