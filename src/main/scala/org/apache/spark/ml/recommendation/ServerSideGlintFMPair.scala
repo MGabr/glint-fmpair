@@ -18,6 +18,7 @@ import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
 
 import scala.collection.BitSet
 import scala.concurrent.duration._
@@ -345,7 +346,7 @@ class ServerSideGlintFMPair(override val uid: String)
     }
 
     @transient
-    val linear = client.fmpairVector(args, numFeatures, avgActiveItemFeatures, getNumParameterServers)
+    val linear = client.fmpairVector(args, numFeatures, avgActiveItemFeatures, 1)
     @transient
     val factors = client.fmpairMatrix(args, numFeatures, avgActiveFeatures, getNumParameterServers)
 
@@ -413,8 +414,13 @@ class ServerSideGlintFMPair(override val uid: String)
         val itemsByCount = bcItemsByCount.value
 
         // create mapping of user ids to their set of sampling ids
-        val userSamplings = item2sampling.map(i2s =>
-          interactions.groupBy(_.userId).mapValues(v => BitSet(v.map(i => i2s(i.itemId)) :_*)))
+        val userSamplings = item2sampling.map(i2s => {
+          val us = new IntObjectHashMap[BitSet]()  // instead of scala map, essential for performance
+          interactions.groupBy(_.userId).foreach { case (userId, items) =>
+            us.put(userId, BitSet(items.map(i => i2s(i.itemId)) :_*))
+          }
+          us
+        })
 
         // create sampling function to use
         val sample = if (item2sampling.isDefined) {
@@ -597,7 +603,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @param item2sampling The mapping of item ids to their sampling id
    * @return A sampler function creating an array of sampled interactions
    */
-  private def uniformSampler(userSamplings: Map[Int, BitSet], item2sampling: Array[Int]):
+  private def uniformSampler(userSamplings: IntObjectHashMap[BitSet], item2sampling: Array[Int]):
   (Random, Array[Interaction]) => Array[SampledInteraction] = {
 
     val numItems = item2sampling.length
@@ -605,7 +611,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
     def uniformSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         var negitemId = random.nextInt(numItems)
-        while (userSamplings(userId).contains(item2sampling(negitemId))) {
+        while (userSamplings.get(userId).contains(item2sampling(negitemId))) {
           negitemId = random.nextInt(numItems)
         }
         SampledInteraction(userId, itemId, negitemId, userctxFeatures)
@@ -624,7 +630,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @param rho The rho parameter for the exponential distribution
    * @return A sampler function creating an array of sampled interactions
    */
-  private def expSampler(userSamplings: Map[Int, BitSet],
+  private def expSampler(userSamplings: IntObjectHashMap[BitSet],
                          item2sampling: Array[Int],
                          itemsByCount: Array[Int],
                          rho: Double): (Random, Array[Interaction]) => Array[SampledInteraction] = {
@@ -635,7 +641,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
     def expSample(random: Random, interactions: Array[Interaction]): Array[SampledInteraction] = {
       interactions.map { case Interaction(userId, itemId, userctxFeatures) =>
         var negitemId = itemsByCount((-numItems * rho * math.log(1 - random.nextDouble() * truncationCDF)).toInt)
-        while (userSamplings(userId).contains(item2sampling(negitemId))) {
+        while (userSamplings.get(userId).contains(item2sampling(negitemId))) {
           negitemId = itemsByCount((-numItems * rho * math.log(1 - random.nextDouble() * truncationCDF)).toInt)
         }
         SampledInteraction(userId, itemId, negitemId, userctxFeatures)
@@ -651,7 +657,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @param item2sampling The mapping of item ids to their sampling id
    * @return A sampler function creating an array of sampled interactions and a non-acceptance matrix
    */
-  private def crossbatchSampler(userSamplings: Map[Int, BitSet], item2sampling: Array[Int]):
+  private def crossbatchSampler(userSamplings: IntObjectHashMap[BitSet], item2sampling: Array[Int]):
   (Random, Array[Interaction]) => (Array[SampledInteraction], DenseMatrix[Float]) = {
 
     val numItems = item2sampling.length
@@ -669,7 +675,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
         val s = samples(i)
         val userId = s.userId
         cforRange(0 until batchSize)(j => {
-          if (userSamplings(userId).contains(item2sampling(s.negitemId))) {
+          if (userSamplings.get(userId).contains(item2sampling(s.negitemId))) {
             na(i)(j) = 1.0f
           }
         })
