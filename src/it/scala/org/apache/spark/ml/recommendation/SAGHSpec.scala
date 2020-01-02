@@ -108,4 +108,31 @@ class SAGHSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Ma
     hitRate should be >= 0.1
     ndcg should be > 0.04
   }
+
+  it should "have a high enough hit rate and ndcg for the top 50 recommendations - filter user items" in {
+    if (!modelCreated) {
+      pending
+    }
+
+    val testdata = SAGHSpec.load(s, testdataPath)
+    val testquerydata = SAGHSpec.load(s, testquerydataPath)
+
+    val model = SAGHModel.load(modelPath).setFilterUserItems(true)
+
+    val dcgs = model.recommendForUserSubset(testquerydata, 50)
+      .join(testdata, "userid")
+      .rdd
+      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
+      .map { case (item, recs) =>
+        recs.zipWithIndex.map { case (rec, i) =>
+          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+        }.sum
+      }.collect()
+
+    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+    val ndcg = dcgs.sum / dcgs.length
+
+    hitRate should be > 0.09
+    ndcg should be > 0.039
+  }
 }

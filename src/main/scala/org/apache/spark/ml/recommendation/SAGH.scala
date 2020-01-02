@@ -1,7 +1,7 @@
 package org.apache.spark.ml.recommendation
 
 import org.apache.spark.ml.{Estimator, Model}
-import org.apache.spark.ml.param.{Param, ParamMap, Params}
+import org.apache.spark.ml.param.{BooleanParam, Param, ParamMap, Params}
 import org.apache.spark.ml.param.shared.HasPredictionCol
 import org.apache.spark.ml.util.{DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, SchemaUtils}
 import org.apache.spark.sql.expressions.Window
@@ -46,6 +46,17 @@ private[recommendation] trait SAGHParams extends Params with HasPredictionCol {
 
   /** @group getParam */
   def getArtistCol: String = $(artistCol)
+
+
+  /**
+   * Whether the items of a user should be filtered from the recommendations for the user
+   * Default: false
+   */
+  final val filterUserItems = new BooleanParam(this, "filterUserItems", "whether the items of a user should be filtered from the recommendations for the user")
+  setDefault(filterUserItems -> false)
+
+  /** @group getParam */
+  def getFilterUserItems: Boolean = $(filterUserItems)
 }
 
 class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParams with DefaultParamsWritable {
@@ -69,7 +80,7 @@ class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParam
       .distinct()
       .groupBy(getItemCol, getArtistCol)
       .agg(count(getUserCol).as("score"))
-      .orderBy(desc("score"), asc("itemid"))
+      .orderBy(desc("score"), asc(getItemCol))
 
     copyValues(new SAGHModel(this.uid, itemCounts).setParent(this))
   }
@@ -85,6 +96,9 @@ class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParam
 
 class SAGHModel private[ml](override val uid: String, val itemCounts: DataFrame)
   extends Model[SAGHModel] with SAGHParams with MLWritable {
+
+  /** @group setParam */
+  def setFilterUserItems(value: Boolean): this.type = set(filterUserItems, value)
 
   override def transform(dataset: Dataset[_]): DataFrame = {
     throw new NotImplementedError() // TODO
@@ -108,31 +122,36 @@ class SAGHModel private[ml](override val uid: String, val itemCounts: DataFrame)
    * @param dataset The dataset containing a column of user ids and a column of artist ids.
    *                The column names must match userCol and artistCol
    * @param numItems The maximum number of recommendations for each user
-   * @param explode Whether the resulting dataframe should be exploded or contain only a single row for each user
    * @return A dataframe of (userCol: Int, recommendations), where recommendations are stored
-   *         as an array of (score: Float, itemCol: Int) rows. Or if exploded
-   *         a dataframe of (userCol: Int, score: Float, itemCol: Int) rows.
+   *         as an array of (score: Float, itemCol: Int) rows.
    */
-  def recommendForUserSubset(dataset: Dataset[_], numItems: Int, explode: Boolean = false): DataFrame = {
+  def recommendForUserSubset(dataset: Dataset[_], numItems: Int): DataFrame = {
+
+    val recommendDf = if (getFilterUserItems) {
+      dataset
+        .select(col(getUserCol), col(getArtistCol), col(getItemCol).as("useritemid"))
+        .join(itemCounts, getArtistCol)
+        .filter(col("useritemid").notEqual(col(getItemCol)))
+        .dropDuplicates(getUserCol, getItemCol)
+    } else {
+      dataset
+        .select(getUserCol, getArtistCol)
+        .distinct()
+        .join(itemCounts, getArtistCol)
+    }
 
     val window = Window.partitionBy(getUserCol).orderBy(desc("score"), asc("itemid"))
-    val recommendDf = dataset.select(getUserCol, getArtistCol).distinct()
-      // get top numItems of same artists
-      .join(itemCounts, getArtistCol)
+
+    recommendDf
+      // get top numItems
       .select(col(getUserCol), col(getItemCol), col("score"), row_number().over(window).as("rowno"))
       .filter(col("rowno").leq(numItems))
       .select(getUserCol, "score", getItemCol)
-
-    if (explode) {
-      recommendDf
-    } else {
       // convert to rows with recommendation arrays
-      recommendDf
-        .withColumn("recommendation", struct("score", getItemCol))  // score first for sort
-        .groupBy(getUserCol)
-        .agg(sort_array(collect_list("recommendation"), asc=false).as("recommendations"))
-        .select(getUserCol, "recommendations")
-    }
+      .withColumn("recommendation", struct("score", getItemCol))  // score first for sort
+      .groupBy(getUserCol)
+      .agg(sort_array(collect_list("recommendation"), asc=false).as("recommendations"))
+      .select(getUserCol, "recommendations")
   }
 }
 

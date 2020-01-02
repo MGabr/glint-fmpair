@@ -10,7 +10,7 @@ import org.apache.spark.broadcast.Broadcast
 import spire.implicits.cforRange
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
 import org.apache.spark.ml.{Estimator, Model}
-import org.apache.spark.ml.param.{DoubleParam, FloatParam, IntParam, Param, ParamMap, ParamValidators, Params}
+import org.apache.spark.ml.param.{BooleanParam, DoubleParam, FloatParam, IntParam, Param, ParamMap, ParamValidators, Params}
 import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
 import org.apache.spark.ml.recommendation.ServerSideGlintFMPair.{Interaction, SampledFeatures, SampledInteraction}
 import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, SchemaUtils}
@@ -20,7 +20,7 @@ import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType
 import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
 
-import scala.collection.BitSet
+import scala.collection.{BitSet, mutable}
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Random
@@ -201,6 +201,17 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 
 
   /**
+   * Whether the items of a user should be filtered from the recommendations for the user
+   * Default: false
+   */
+  final val filterUserItems = new BooleanParam(this, "filterUserItems", "whether the items of a user should be filtered from the recommendations for the user")
+  setDefault(filterUserItems -> false)
+
+  /** @group getParam */
+  def getFilterUserItems: Boolean = $(filterUserItems)
+
+
+  /**
    * The number of parameter servers to create
    * Default: 5
    *
@@ -315,6 +326,7 @@ class ServerSideGlintFMPair(override val uid: String)
 
   /** @group setParam */
   def setParameterServerConfig(value: Config): this.type = set(parameterServerConfig, value.resolve())
+
 
   override def fit(dataset: Dataset[_]): ServerSideGlintFMPairModel = {
 
@@ -742,6 +754,9 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
                                              @transient private[spark] val client: Client)
   extends Model[ServerSideGlintFMPairModel] with ServerSideGlintFMPairParams with MLWritable {
 
+  /** @group setParam */
+  def setFilterUserItems(value: Boolean): this.type = set(filterUserItems, value)
+
   @transient
   implicit private lazy val ec: ExecutionContext = ExecutionContext.Implicits.global
 
@@ -764,6 +779,69 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   override def write: MLWriter = new ServerSideGlintFMPairModel.ServerSideGlintFMPairModelWriter(this)
 
   /**
+   * Converts a dataset to a data frame required for this model. filterUserItems is considered
+   */
+  private def toDf(dataset: Dataset[_]): DataFrame = {
+    if (getFilterUserItems) {
+      dataset
+        .select(getUserCol, getUserctxfeaturesCol, getItemCol)
+        .groupBy(getUserCol)
+        .agg(first(getUserctxfeaturesCol).as(getUserctxfeaturesCol), collect_set(getItemCol).as("useritemids"))
+        .select(getUserCol, getUserctxfeaturesCol, "useritemids")
+    } else {
+      dataset.select(getUserCol, getUserctxfeaturesCol)
+    }
+  }
+
+  /**
+   * Converts a row iterator to arrays of user information. filterUserItems is considered
+   */
+  private def toArrays(iter: Iterator[Row], numItems: Int):
+  (Array[Int], Array[BitSet], Array[Array[Int]], Array[Array[Float]], Int) = {
+
+    val rows = iter.toArray
+
+    val userIds = rows.map(_.getInt(0))
+    val userctxFeatures = rows.map(row => row.getAs[SparseVector](1))
+    val userIndices = userctxFeatures.map(_.indices)
+    val userWeights = userctxFeatures.map(_.values.map(_.toFloat))
+
+    val userItemIds = if (getFilterUserItems) rows.map(row => BitSet(row.getSeq[Int](2) :_*)) else new Array[BitSet](0)
+    val numArgtopItems = if (getFilterUserItems) numItems + userItemIds.map(_.size).max else numItems
+
+    (userIds, userItemIds, userIndices, userWeights, numArgtopItems)
+  }
+
+  /**
+   * Converts arrays of user information and score matrices to an iterator of (userCol: Int, recommendations) rows,
+   * where recommendations are stored as an array of (itemCol: Int, score: Float) rows.
+   *
+   * Only numItems recommendations are returned per user. User items are filtered if filterUserItems is set.
+   */
+  private def toRowIter(userIds: Array[Int],
+                        userItemIds: Array[BitSet],
+                        argMatrix: DenseMatrix[Int],
+                        scoresMatrix: DenseMatrix[Float],
+                        numItems: Int): Iterator[Row] = {
+
+    val userIter = if (getFilterUserItems) userIds.iterator.zip(userItemIds.iterator) else userIds.iterator
+    userIter.zip(argMatrix(*,::).iterator.zip(scoresMatrix(*,::).iterator)).map {
+
+      case ((userid: Int, userItemids: BitSet), (itemids, scores)) =>
+        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
+          .filter { case (itemid, _) => !userItemids.contains(itemid) }
+          .take(numItems)
+          .map { case (itemid, score) => Row(itemid, score) }.toArray
+        Row(userid, recs)
+
+      case (userid: Int, (itemids, scores)) =>
+        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
+          .map { case (itemid, score) => Row(itemid, score) }.toArray
+        Row(userid, recs)
+    }
+  }
+
+  /**
    * Returns top numItems items recommended for each user id in the input data set
    *
    * @param dataset The dataset containing a column of user ids. The column name must match userCol
@@ -779,77 +857,73 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
     val recommendSchema = new StructType().add(getUserCol, IntegerType).add("recommendations", recommendType)
     val rowEncoder = RowEncoder(recommendSchema)
 
-    dataset.select(getUserCol, getUserctxfeaturesCol).mapPartitions { iter =>
-      val rows = iter.toSeq
-      val batchSize = getBatchSize
+    toDf(dataset).mapPartitions { iter =>
 
-      // pull sums of user features
-      val userctxFeatures = rows.map(row => row.getAs[SparseVector](1))
-      val userIndices = userctxFeatures.map(_.indices).toArray
-      val userWeights = userctxFeatures.map(_.values.map(_.toFloat)).toArray
-      val topFuture = factors.pullSum(userIndices, userWeights, false).flatMap { case (userFactors, _) =>
+      if (iter.isEmpty) {
+        Iterator.empty  // handle empty partition
 
-        val userMatrix = DenseMatrix(userFactors :_*)
+      } else {
+        val batchSize = getBatchSize
+        val (userIds, userItemIds, userIndices, userWeights, numArgtopItems) = toArrays(iter, numItems)
 
-        val initialScoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, 0)
-        val initialArgMatrix = DenseMatrix.zeros[Int](userMatrix.rows, 0)
-        val initialBatchFuture = Future.successful((initialScoresMatrix, initialArgMatrix))
+        // pull sums of user features
+        val topFuture = factors.pullSum(userIndices, userWeights, false).flatMap { case (userFactors, _) =>
 
-        bcItemFeatures.value
-          .grouped(batchSize)  // group item features into batches
-          .zipWithIndex
-          .foldLeft(initialBatchFuture) { case (prevBatchFuture, (itemBatch, i)) =>
+          val userMatrix = DenseMatrix(userFactors: _*)
 
-            // convert features to the arrays required by the parameter servers
-            val itemIndices = itemBatch.map(_.indices)
-            val itemWeights = itemBatch.map(_.values.map(_.toFloat))
+          val initialScoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, 0)
+          val initialArgMatrix = DenseMatrix.zeros[Int](userMatrix.rows, 0)
+          val initialBatchFuture = Future.successful((initialScoresMatrix, initialArgMatrix))
 
-            val argBatchMatrix = tile(DenseVector((i * batchSize until (i + 1) * batchSize).toArray),
-              1, userMatrix.rows).t
+          bcItemFeatures.value
+            .grouped(batchSize) // group item features into batches
+            .zipWithIndex
+            .foldLeft(initialBatchFuture) { case (prevBatchFuture, (itemBatch, i)) =>
 
-            // wait until communication with parameter servers for previous batches is finished
-            // this allows already pre-processing the next batch while waiting for the parameter server responses
-            var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
+              // convert features to the arrays required by the parameter servers
+              val itemIndices = itemBatch.map(_.indices)
+              val itemWeights = itemBatch.map(_.values.map(_.toFloat))
 
-            // pull sums of item features of batch
-            val itemLinearFuture = linear.pullSum(itemIndices, itemWeights, false)
-            val itemFactorsFuture = factors.pullSum(itemIndices, itemWeights, false)
+              val argBatchMatrix = tile(DenseVector((i * batchSize until (i + 1) * batchSize).toArray),
+                1, userMatrix.rows).t
 
-            for {
-              (itemLinear, _) <- itemLinearFuture
-              (itemFactors, _) <- itemFactorsFuture
-            } yield {
-              // compute scores for users and all items of batch
-              val itemVector = DenseVector(itemLinear)
-              val itemMatrix = DenseMatrix(itemFactors: _*)
-              val scoresBatchMatrix_ = userMatrix * itemMatrix.t
-              val scoresBatchMatrix = scoresBatchMatrix_(*,::) + itemVector
+              // wait until communication with parameter servers for previous batches is finished
+              // this allows already pre-processing the next batch while waiting for the parameter server responses
+              var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
 
-              // concatenate with previous top scores and keep top scores of concatenation
-              val scoresCatMatrix = DenseMatrix.horzcat(scoresMatrix, scoresBatchMatrix)
-              val argCatMatrix = DenseMatrix.horzcat(argMatrix, argBatchMatrix)
-              if (scoresMatrix.cols == 0) {  // if first concat then initialize the top matrices properly now
-                scoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, numItems)
-                argMatrix = DenseMatrix.zeros[Int](userMatrix.rows, numItems)
+              // pull sums of item features of batch
+              val itemLinearFuture = linear.pullSum(itemIndices, itemWeights, false)
+              val itemFactorsFuture = factors.pullSum(itemIndices, itemWeights, false)
+
+              for {
+                (itemLinear, _) <- itemLinearFuture
+                (itemFactors, _) <- itemFactorsFuture
+              } yield {
+                // compute scores for users and all items of batch
+                val itemVector = DenseVector(itemLinear)
+                val itemMatrix = DenseMatrix(itemFactors: _*)
+                val scoresBatchMatrix_ = userMatrix * itemMatrix.t
+                val scoresBatchMatrix = scoresBatchMatrix_(*, ::) + itemVector
+
+                // concatenate with previous top scores and keep top scores of concatenation
+                val scoresCatMatrix = DenseMatrix.horzcat(scoresMatrix, scoresBatchMatrix)
+                val argCatMatrix = DenseMatrix.horzcat(argMatrix, argBatchMatrix)
+                if (scoresMatrix.cols == 0) { // if first concat then initialize the top matrices properly now
+                  scoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, numArgtopItems)
+                  argMatrix = DenseMatrix.zeros[Int](userMatrix.rows, numArgtopItems)
+                }
+                val scoresArgtop = argtopk(scoresCatMatrix(*, ::), numArgtopItems)
+                cforRange(0 until scoresMatrix.rows)(j => {
+                  scoresMatrix(j, ::) := scoresCatMatrix(j, scoresArgtop(j))
+                  argMatrix(j, ::) := argCatMatrix(j, scoresArgtop(j))
+                })
+
+                (scoresMatrix, argMatrix)
               }
-              val scoresArgtop = argtopk(scoresCatMatrix(*,::), numItems)
-              cforRange(0 until scoresMatrix.rows)(j => {
-                scoresMatrix(j, ::) := scoresCatMatrix(j, scoresArgtop(j))
-                argMatrix(j, ::) := argCatMatrix(j, scoresArgtop(j))
-              })
-
-              (scoresMatrix, argMatrix)
             }
-          }
-      }
-      val (scoresMatrix, argMatrix) = Await.result(topFuture, 5 minutes)
-
-      // add recommendations (scores and ids) to the rows of user ids
-      rows.map(_.getInt(0)).toIterator.zip(argMatrix(*,::).iterator.zip(scoresMatrix(*,::).iterator)).map {
-        case (userid, (itemids, scores)) =>
-          val recs = itemids.valuesIterator.zip(scores.valuesIterator)
-            .map { case (itemid, score) => Row(itemid, score) }.toArray
-          Row(userid, recs)
+        }
+        val (scoresMatrix, argMatrix) = Await.result(topFuture, 5 minutes)
+        toRowIter(userIds, userItemIds, argMatrix, scoresMatrix, numItems)
       }
     }(rowEncoder).toDF(getUserCol, "recommendations")
     .select(col(getUserCol), col("recommendations").cast(recommendType))
@@ -884,7 +958,7 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
       val savedLinearFuture = instance.linear.save(path + "/linear", sc.hadoopConfiguration)
       val savedFactorsFuture = instance.factors.save(path + "/factors", sc.hadoopConfiguration)
       sc.parallelize(instance.bcItemFeatures.value, 1).saveAsObjectFile(path + "/itemfeatures")
-      Await.ready(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 5 minutes)  // timedout
+      Await.ready(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 5 minutes)
     }
   }
 

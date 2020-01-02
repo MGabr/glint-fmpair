@@ -31,6 +31,7 @@ class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with
    * where the last track occurred already in the train dataset.
    */
   private val traindataPath = "AOTM-2011-small-train.csv"
+  private val testquerydataPath = "AOTM-2011-small-test-queryseeds.csv"
   private val testdataPath = "AOTM-2011-small-test.csv"
 
   /**
@@ -51,6 +52,7 @@ class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with
     fs.delete(fs.getHomeDirectory, true)
     fs.copyFromLocalFile(new Path(traindataPath), new Path(traindataPath))
     fs.copyFromLocalFile(new Path(testdataPath), new Path(testdataPath))
+    fs.copyFromLocalFile(new Path(testquerydataPath), new Path(testquerydataPath))
   }
 
   override def afterAll(): Unit = {
@@ -89,6 +91,33 @@ class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with
     val testquerydata = testdata.drop("itemid")
 
     val model = PopRankModel.load(modelPath)
+
+    val dcgs = model.recommendForUserSubset(testquerydata, 50)
+      .join(testdata, "userid")
+      .rdd
+      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
+      .map { case (item, recs) =>
+        recs.zipWithIndex.map { case (rec, i) =>
+          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+        }.sum
+      }.collect()
+
+    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+    val ndcg = dcgs.sum / dcgs.length
+
+    hitRate should be >= 0.34
+    ndcg should be > 0.27
+  }
+
+  it should "have a high enough hit rate and ndcg for the top 50 recommendations - filter user items" in {
+    if (!modelCreated) {
+      pending
+    }
+
+    val testdata = PopRankSpec.load(s, testdataPath)
+    val testquerydata = SAGHSpec.load(s, testquerydataPath)
+
+    val model = PopRankModel.load(modelPath).setFilterUserItems(true)
 
     val dcgs = model.recommendForUserSubset(testquerydata, 50)
       .join(testdata, "userid")

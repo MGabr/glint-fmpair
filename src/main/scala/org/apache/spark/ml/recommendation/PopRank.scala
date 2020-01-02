@@ -1,7 +1,7 @@
 package org.apache.spark.ml.recommendation
 
 import org.apache.spark.ml.{Estimator, Model}
-import org.apache.spark.ml.param.{Param, ParamMap, Params}
+import org.apache.spark.ml.param.{BooleanParam, Param, ParamMap, Params}
 import org.apache.spark.ml.param.shared.HasPredictionCol
 import org.apache.spark.ml.util.{DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, SchemaUtils}
 import org.apache.spark.sql.expressions.Window
@@ -34,6 +34,17 @@ private[recommendation] trait PopRankParams extends Params with HasPredictionCol
 
   /** @group getParam */
   def getItemCol: String = $(itemCol)
+
+
+  /**
+   * Whether the items of a user should be filtered from the recommendations for the user
+   * Default: false
+   */
+  final val filterUserItems = new BooleanParam(this, "filterUserItems", "whether the items of a user should be filtered from the recommendations for the user")
+  setDefault(filterUserItems -> false)
+
+  /** @group getParam */
+  def getFilterUserItems: Boolean = $(filterUserItems)
 }
 
 class PopRank(override val uid: String) extends Estimator[PopRankModel] with PopRankParams with DefaultParamsWritable {
@@ -71,6 +82,11 @@ class PopRank(override val uid: String) extends Estimator[PopRankModel] with Pop
 class PopRankModel private[ml](override val uid: String, val itemCounts: DataFrame)
   extends Model[PopRankModel] with PopRankParams with MLWritable {
 
+
+  /** @group setParam */
+  def setFilterUserItems(value: Boolean): this.type = set(filterUserItems, value)
+
+
   override def transform(dataset: Dataset[_]): DataFrame = {
     throw new NotImplementedError() // TODO
   }
@@ -92,33 +108,53 @@ class PopRankModel private[ml](override val uid: String, val itemCounts: DataFra
    *
    * @param dataset  The dataset containing a column of user ids. The column name must match userCol
    * @param numItems The maximum number of recommendations for each user
-   * @param explode Whether the resulting dataframe should be exploded or contain only a single row for each user
    * @return A dataframe of (userCol: Int, recommendations), where recommendations are stored
    *         as an array of (score: Float, itemCol: Int) rows. Or if exploded
    *         a dataframe of (userCol: Int, score: Float, itemCol: Int) rows.
    */
-  def recommendForUserSubset(dataset: Dataset[_], numItems: Int, explode: Boolean = false): DataFrame = {
+  def recommendForUserSubset(dataset: Dataset[_], numItems: Int): DataFrame = {
 
-    // get top numItems, limit(numItems) not working correctly
+    val maxNumItems = if (getFilterUserItems) {
+      numItems + dataset
+        .groupBy(getUserCol)
+        .agg(count(getItemCol).as("count"))
+        .agg(max("count").as("max"))
+        .first()
+        .getAs[Long]("max").toInt
+    } else {
+      numItems
+    }
+
+    // get top maxNumItems, limit(maxNumItems) not working correctly
     val window = Window.orderBy(desc("score"), asc("itemid"))
     val topItemCountsDf = itemCounts
       .select(col(getItemCol), col("score"), row_number().over(window).as("rowno"))
-      .filter(col("rowno").leq(numItems))
+      .filter(col("rowno").leq(maxNumItems))
 
-    val recommendDf = dataset.select(getUserCol).distinct()
-      .crossJoin(topItemCountsDf)
-      .select(getUserCol, "score", getItemCol)
-
-    if (explode) {
-      recommendDf
+    val recommendDf = if (getFilterUserItems) {
+      val userWindow = Window.partitionBy(getUserCol).orderBy(desc("score"), asc("itemid"))
+      dataset
+        .select(col(getUserCol), col(getItemCol).as("useritemid"))
+        .crossJoin(topItemCountsDf)
+        .filter(col("useritemid").notEqual(col(getItemCol)))
+        .dropDuplicates(getUserCol, getItemCol)
+        // get top numItems
+        .select(col(getUserCol), col(getItemCol), col("score"), row_number().over(userWindow).as("userrowno"))
+        .filter(col("userrowno").leq(numItems))
     } else {
-      // convert to rows with recommendation arrays
-      recommendDf
-        .withColumn("recommendation", struct("score", getItemCol))  // score first for sort
-        .groupBy(getUserCol)
-        .agg(sort_array(collect_list("recommendation"), asc=false).as("recommendations"))
-        .select(getUserCol, "recommendations")
+      dataset
+        .select(getUserCol)
+        .distinct()
+        .crossJoin(topItemCountsDf)
+        .select(getUserCol, "score", getItemCol)
     }
+
+    // convert to rows with recommendation arrays
+    recommendDf
+      .withColumn("recommendation", struct("score", getItemCol))  // score first for sort
+      .groupBy(getUserCol)
+      .agg(sort_array(collect_list("recommendation"), asc=false).as("recommendations"))
+      .select(getUserCol, "recommendations")
   }
 }
 

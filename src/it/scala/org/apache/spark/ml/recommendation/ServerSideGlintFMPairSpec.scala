@@ -104,6 +104,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
    * where the last track occurred already in the train dataset.
    */
   private val traindataPath = "AOTM-2011-small-train.csv"
+  private val testquerydataPath = "AOTM-2011-small-test-queryseeds.csv"
   private val testdataPath = "AOTM-2011-small-test.csv"
 
   /**
@@ -141,6 +142,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
     fs.delete(fs.getHomeDirectory, true)
     fs.copyFromLocalFile(new Path(traindataPath), new Path(traindataPath))
     fs.copyFromLocalFile(new Path(testdataPath), new Path(testdataPath))
+    fs.copyFromLocalFile(new Path(testquerydataPath), new Path(testquerydataPath))
   }
 
   override def afterAll(): Unit = {
@@ -207,7 +209,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       .setParameterServerConfig(separateGlintConfig)
       .setSampler("crossbatch")
       .setSamplingCol("itemid")
-      .setMaxIter(10)
+      .setMaxIter(100)
 
     val model = fmpair.fit(traindata)
     try {
@@ -270,7 +272,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       model.getBatchSize shouldBe 1024
       model.getLinearReg shouldBe 0.1f
       model.getFactorsReg shouldBe 0.01f
-      model.getMaxIter shouldBe 10
+      model.getMaxIter shouldBe 100
       model.getNumParameterServers shouldBe 2
       model.getSampler shouldBe "crossbatch"
       model.getSamplingCol shouldBe "itemid"
@@ -292,7 +294,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       ServerSideGlintFMPairSpec.load(s, traindataPath))
     val testdata = ServerSideGlintFMPairSpec.toFeatures(
       ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid")
+    val testquerydata = testdata.drop("itemid", "itemfeatures")
 
     val model = ServerSideGlintFMPairModel.load(modelPath)
     try {
@@ -325,7 +327,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       ServerSideGlintFMPairSpec.load(s, traindataPath))
     val testdata = ServerSideGlintFMPairSpec.toFeatures(
       ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid")
+    val testquerydata = testdata.drop("itemid", "itemfeatures")
 
     val model = ServerSideGlintFMPairModel.load(expModelPath)
     try {
@@ -358,7 +360,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       ServerSideGlintFMPairSpec.load(s, traindataPath))
     val testdata = ServerSideGlintFMPairSpec.toFeatures(
       ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid")
+    val testquerydata = testdata.drop("itemid", "itemfeatures")
 
     val model = ServerSideGlintFMPairModel.load(separateGlintModelPath)
     try {
@@ -375,7 +377,41 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.3
+      hitRate should be > 0.31
+      ndcg should be > 0.26
+    } finally {
+      model.stop()
+    }
+  }
+
+  it should "have a high enough hit rate and ndcg for the top 50 recommendations - crossbatch, filter user items" in {
+    if (!separateGlintModelCreated) {
+      pending
+    }
+
+    val (_, userEncoder, itemEncoder, itemctxEncoder) = ServerSideGlintFMPairSpec.toFeatures(
+      ServerSideGlintFMPairSpec.load(s, traindataPath))
+    val testdata = ServerSideGlintFMPairSpec.toFeatures(
+      ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val testquerydata = ServerSideGlintFMPairSpec.toFeatures(
+      ServerSideGlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
+
+    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath).setFilterUserItems(true)
+    try {
+      val dcgs = model.recommendForUserSubset(testquerydata, 50)
+        .join(testdata, "userid")
+        .rdd
+        .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
+        .map { case (item, recs) =>
+          recs.zipWithIndex.map { case (rec, i) =>
+            if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+          }.sum
+        }.collect()
+
+      val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+      val ndcg = dcgs.sum / dcgs.length
+
+      hitRate should be > 0.31
       ndcg should be > 0.26
     } finally {
       model.stop(terminateOtherClients=true)
