@@ -5,7 +5,6 @@ import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
-import org.scalatest.concurrent.ScalaFutures
 
 import scala.collection.mutable
 
@@ -20,7 +19,7 @@ object PopRankSpec {
   }
 }
 
-class PopRankSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Matchers with Inspectors{
+class PopRankSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
 
   /**
    * Path to small preprocessed subsets of the AOTM-2011 dataset.

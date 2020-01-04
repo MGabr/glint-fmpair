@@ -1,26 +1,26 @@
 package org.apache.spark.ml.recommendation
 
-import org.apache.spark.TaskContext
 import breeze.linalg.{sum => breezeSum, _}
 import breeze.numerics.sigmoid
-import com.typesafe.config.{Config, ConfigFactory, ConfigParseOptions, ConfigRenderOptions, ConfigSyntax}
+import com.typesafe.config._
 import glint.models.client.{BigFMPairMatrix, BigFMPairVector}
 import glint.{Client, FMPairArguments}
+import org.apache.spark.TaskContext
 import org.apache.spark.broadcast.Broadcast
-import spire.implicits.cforRange
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
-import org.apache.spark.ml.{Estimator, Model}
-import org.apache.spark.ml.param.{BooleanParam, DoubleParam, FloatParam, IntParam, Param, ParamMap, ParamValidators, Params}
 import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
+import org.apache.spark.ml.param._
 import org.apache.spark.ml.recommendation.ServerSideGlintFMPair.{Interaction, SampledFeatures, SampledInteraction}
-import org.apache.spark.ml.util.{DefaultParamsReadable, DefaultParamsReader, DefaultParamsWritable, DefaultParamsWriter, Identifiable, MLReadable, MLReader, MLWritable, MLWriter, SchemaUtils}
+import org.apache.spark.ml.util._
+import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
+import spire.implicits.cforRange
 
-import scala.collection.{BitSet, mutable}
+import scala.collection.BitSet
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Random
@@ -99,6 +99,20 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 
   /** @group getParam */
   def getSamplingCol: String = $(samplingCol)
+
+  /**
+   * The name of the integer arrays column containing the [[itemCol]] ids of the items to filter from recommendations.
+   * If empty, recommendations are not filtered. Usually the arrays will contain the ids of the items of the user
+   *
+   * Default: ""
+   *
+   * @group param
+   */
+  final val filterItemsCol = new Param[String](this, "userItems", "")
+  setDefault(filterItemsCol -> "")
+
+  /** @group getParam */
+  def getFilterItemsCol: String = $(filterItemsCol)
 
 
   /**
@@ -198,17 +212,6 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 
   /** @group getParam */
   def getInitMean: Float = $(initMean)
-
-
-  /**
-   * Whether the items of a user should be filtered from the recommendations for the user
-   * Default: false
-   */
-  final val filterUserItems = new BooleanParam(this, "filterUserItems", "whether the items of a user should be filtered from the recommendations for the user")
-  setDefault(filterUserItems -> false)
-
-  /** @group getParam */
-  def getFilterUserItems: Boolean = $(filterUserItems)
 
 
   /**
@@ -540,8 +543,6 @@ class ServerSideGlintFMPair(override val uid: String)
 
 object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair] {
 
-  override def load(path: String): ServerSideGlintFMPair = super.load(path)
-
   /** An interaction from the training instances */
   private case class Interaction(userId: Int, itemId: Int, userctxFeatures: SparseVector)
 
@@ -755,7 +756,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   extends Model[ServerSideGlintFMPairModel] with ServerSideGlintFMPairParams with MLWritable {
 
   /** @group setParam */
-  def setFilterUserItems(value: Boolean): this.type = set(filterUserItems, value)
+  def setFilterItemsCol(value: String): this.type = set(filterItemsCol, value)
 
   @transient
   implicit private lazy val ec: ExecutionContext = ExecutionContext.Implicits.global
@@ -779,22 +780,18 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   override def write: MLWriter = new ServerSideGlintFMPairModel.ServerSideGlintFMPairModelWriter(this)
 
   /**
-   * Converts a dataset to a data frame required for this model. filterUserItems is considered
+   * Converts a dataset to a data frame required for this model. Filtering is considered
    */
   private def toDf(dataset: Dataset[_]): DataFrame = {
-    if (getFilterUserItems) {
-      dataset
-        .select(getUserCol, getUserctxfeaturesCol, getItemCol)
-        .groupBy(getUserCol)
-        .agg(first(getUserctxfeaturesCol).as(getUserctxfeaturesCol), collect_set(getItemCol).as("useritemids"))
-        .select(getUserCol, getUserctxfeaturesCol, "useritemids")
+    if (getFilterItemsCol.nonEmpty) {
+      dataset.select(getUserCol, getUserctxfeaturesCol, getFilterItemsCol)
     } else {
       dataset.select(getUserCol, getUserctxfeaturesCol)
     }
   }
 
   /**
-   * Converts a row iterator to arrays of user information. filterUserItems is considered
+   * Converts a row iterator to arrays of user information. Filtering is considered
    */
   private def toArrays(iter: Iterator[Row], numItems: Int):
   (Array[Int], Array[BitSet], Array[Array[Int]], Array[Array[Float]], Int) = {
@@ -806,8 +803,8 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
     val userIndices = userctxFeatures.map(_.indices)
     val userWeights = userctxFeatures.map(_.values.map(_.toFloat))
 
-    val userItemIds = if (getFilterUserItems) rows.map(row => BitSet(row.getSeq[Int](2) :_*)) else new Array[BitSet](0)
-    val numArgtopItems = if (getFilterUserItems) numItems + userItemIds.map(_.size).max else numItems
+    val userItemIds = if (getFilterItemsCol.nonEmpty) rows.map(r => BitSet(r.getSeq[Int](2) :_*)) else new Array[BitSet](0)
+    val numArgtopItems = if (getFilterItemsCol.nonEmpty) numItems + userItemIds.map(_.size).max else numItems
 
     (userIds, userItemIds, userIndices, userWeights, numArgtopItems)
   }
@@ -824,7 +821,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
                         scoresMatrix: DenseMatrix[Float],
                         numItems: Int): Iterator[Row] = {
 
-    val userIter = if (getFilterUserItems) userIds.iterator.zip(userItemIds.iterator) else userIds.iterator
+    val userIter = if (getFilterItemsCol.nonEmpty) userIds.iterator.zip(userItemIds.iterator) else userIds.iterator
     userIter.zip(argMatrix(*,::).iterator.zip(scoresMatrix(*,::).iterator)).map {
 
       case ((userid: Int, userItemids: BitSet), (itemids, scores)) =>
@@ -844,14 +841,13 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   /**
    * Returns top numItems items recommended for each user id in the input data set
    *
-   * @param dataset The dataset containing a column of user ids. The column name must match userCol
+   * @param dataset The dataset containing a column of user ids and user context features. The column names must match
+   *                userCol, userctxfeaturesCol and, if filtering should be used, also filterItemsCol.
    * @param numItems The maximum number of recommendations for each user
    * @return A dataframe of (userCol: Int, recommendations), where recommendations are stored
    *         as an array of (itemCol: Int, score: Float) rows.
    */
   def recommendForUserSubset(dataset: Dataset[_], numItems: Int): DataFrame = {
-
-    import dataset.sparkSession.implicits._
 
     val recommendType = ArrayType(new StructType().add(getItemCol, IntegerType).add("score", FloatType))
     val recommendSchema = new StructType().add(getUserCol, IntegerType).add("recommendations", recommendType)
@@ -863,8 +859,8 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
         Iterator.empty  // handle empty partition
 
       } else {
-        val batchSize = getBatchSize
         val (userIds, userItemIds, userIndices, userWeights, numArgtopItems) = toArrays(iter, numItems)
+        val batchSize = math.max(getBatchSize, numArgtopItems)
 
         // pull sums of user features
         val topFuture = factors.pullSum(userIndices, userWeights, false).flatMap { case (userFactors, _) =>

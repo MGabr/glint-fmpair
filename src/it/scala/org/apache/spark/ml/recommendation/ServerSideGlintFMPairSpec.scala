@@ -4,13 +4,13 @@ import java.net.InetAddress
 
 import com.typesafe.config.ConfigFactory
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, FileUtil, Path}
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.ml.feature.{OneHotEncoderEstimator, OneHotEncoderModel, VectorAssembler}
 import org.apache.spark.ml.param.{ParamMap, ParamPair}
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.functions._
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
-import org.scalatest.concurrent.ScalaFutures
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
@@ -18,7 +18,7 @@ import scala.concurrent.ExecutionContext
 object ServerSideGlintFMPairSpec {
 
   /**
-   * Helper function to load preprocessed csv data from path as dataframe
+   * Helper function to load csv data from path as dataframe
    */
   def load(s: SparkSession, dataPath: String): DataFrame = {
     s.read.format("csv").option("header", "true").option("inferSchema", "true").load(dataPath)
@@ -92,8 +92,7 @@ object ServerSideGlintFMPairSpec {
   }
 }
 
-class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAndAfterAll with Matchers
-  with Inspectors {
+class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
 
   /**
    * Path to small preprocessed subsets of the AOTM-2011 dataset.
@@ -395,8 +394,10 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
     val testquerydata = ServerSideGlintFMPairSpec.toFeatures(
       ServerSideGlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
+      .select(col("userid"), collect_set("itemid").over(Window.partitionBy("userid")).as("filteritemids"))
+      .join(testdata, "userid")
 
-    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath).setFilterUserItems(true)
+    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
     try {
       val dcgs = model.recommendForUserSubset(testquerydata, 50)
         .join(testdata, "userid")
@@ -411,8 +412,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with ScalaFutures with BeforeAn
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.31
-      ndcg should be > 0.26
+      hitRate should be > 0.28
+      ndcg should be > 0.23
     } finally {
       model.stop(terminateOtherClients=true)
     }
