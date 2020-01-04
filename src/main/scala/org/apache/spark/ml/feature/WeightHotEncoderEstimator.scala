@@ -32,8 +32,8 @@ import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, lit, udf}
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
 
-/** Private trait for params and common methods for OneHotEncoderEstimator and OneHotEncoderModel */
-private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
+/** Private trait for params and common methods for WeightHotEncoderEstimator and WeightHotEncoderModel */
+private[ml] trait WeightHotEncoderBase extends Params with HasHandleInvalid
   with HasInputCols with HasOutputCols {
 
   /**
@@ -51,9 +51,9 @@ private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
       "Options are 'keep' (invalid data presented as an extra categorical feature) " +
       "or error (throw an error). Note that this Param is only used during transform; " +
       "during fitting, invalid data will result in an error.",
-    ParamValidators.inArray(OneHotEncoderEstimator.supportedHandleInvalids))
+    ParamValidators.inArray(WeightHotEncoderEstimator.supportedHandleInvalids))
 
-  setDefault(handleInvalid, OneHotEncoderEstimator.ERROR_INVALID)
+  setDefault(handleInvalid, WeightHotEncoderEstimator.ERROR_INVALID)
 
   /**
    * Whether to drop the last category in the encoded vector (default: true)
@@ -67,6 +67,16 @@ private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
   /** @group getParam */
   @Since("2.3.0")
   def getDropLast: Boolean = $(dropLast)
+
+  /**
+   * The weight to use instead of 1.0 for hot encoding, for each column
+   * @group param
+   */
+  final val weights: DoubleArrayParam = new DoubleArrayParam(this, "weights",
+    "the weight to use instead of 1.0 for hot encoding per column")
+
+  /** @group getParam */
+  def getWeights: Array[Double] = $(weights)
 
   protected def validateAndTransformSchema(
                                             schema: StructType,
@@ -86,7 +96,7 @@ private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
     val inputFields = $(inputCols).map(schema(_))
 
     val outputFields = inputFields.zip(outputColNames).map { case (inputField, outputColName) =>
-      OneHotEncoderCommon.transformOutputColumnSchema(
+      WeightHotEncoderCommon.transformOutputColumnSchema(
         inputField, outputColName, dropLast, keepInvalid)
     }
     outputFields.foldLeft(schema) { case (newSchema, outputField) =>
@@ -96,16 +106,13 @@ private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
 }
 
 /**
- * A one-hot encoder that maps a column of category indices to a column of binary vectors, with
- * at most a single one-value per row that indicates the input category index.
- * For example with 5 categories, an input value of 2.0 would map to an output vector of
- * `[0.0, 0.0, 1.0, 0.0]`.
+ * A weighted one-hot encoder that maps a column of category indices to a column of vectors, with
+ * at most a single weight value per row that indicates the input category index.
+ * For example with 5 categories and a weight of 0.3, an input value of 2.0 would map to an output vector of
+ * `[0.0, 0.0, 0.3, 0.0]`.
  * The last category is not included by default (configurable via `dropLast`),
- * because it makes the vector entries sum up to one, and hence linearly dependent.
+ * because it makes the vector entries linearly dependent.
  * So an input value of 4.0 maps to `[0.0, 0.0, 0.0, 0.0]`.
- *
- * @note This is different from scikit-learn's OneHotEncoder, which keeps all categories.
- * The output vectors are sparse.
  *
  * When `handleInvalid` is configured to 'keep', an extra "category" indicating invalid values is
  * added as last category. So when `dropLast` is true, invalid values are encoded as all-zeros
@@ -117,11 +124,11 @@ private[ml] trait OneHotEncoderBase extends Params with HasHandleInvalid
  * @see `StringIndexer` for converting categorical values into category indices
  */
 @Since("2.3.0")
-class OneHotEncoderEstimator @Since("2.3.0") (@Since("2.3.0") override val uid: String)
-  extends Estimator[OneHotEncoderModel] with OneHotEncoderBase with DefaultParamsWritable {
+class WeightHotEncoderEstimator @Since("2.3.0") (@Since("2.3.0") override val uid: String)
+  extends Estimator[WeightHotEncoderModel] with WeightHotEncoderBase with DefaultParamsWritable {
 
   @Since("2.3.0")
-  def this() = this(Identifiable.randomUID("oneHotEncoder"))
+  def this() = this(Identifiable.randomUID("weightHotEncoder"))
 
   /** @group setParam */
   @Since("2.3.0")
@@ -139,15 +146,18 @@ class OneHotEncoderEstimator @Since("2.3.0") (@Since("2.3.0") override val uid: 
   @Since("2.3.0")
   def setHandleInvalid(value: String): this.type = set(handleInvalid, value)
 
+  /** @group setParam */
+  def setWeights(value: Array[Double]): this.type = set(weights, value)
+
   @Since("2.3.0")
   override def transformSchema(schema: StructType): StructType = {
-    val keepInvalid = $(handleInvalid) == OneHotEncoderEstimator.KEEP_INVALID
+    val keepInvalid = $(handleInvalid) == WeightHotEncoderEstimator.KEEP_INVALID
     validateAndTransformSchema(schema, dropLast = $(dropLast),
       keepInvalid = keepInvalid)
   }
 
   @Since("2.3.0")
-  override def fit(dataset: Dataset[_]): OneHotEncoderModel = {
+  override def fit(dataset: Dataset[_]): WeightHotEncoderModel = {
     transformSchema(dataset.schema)
 
     // Compute the plain number of categories without `handleInvalid` and
@@ -175,30 +185,30 @@ class OneHotEncoderEstimator @Since("2.3.0") (@Since("2.3.0") override val uid: 
 
       // When fitting data, we want the plain number of categories without `handleInvalid` and
       // `dropLast` taken into account.
-      val attrGroups = OneHotEncoderCommon.getOutputAttrGroupFromData(
+      val attrGroups = WeightHotEncoderCommon.getOutputAttrGroupFromData(
         dataset, inputColNames, outputColNames, dropLast = false)
       attrGroups.zip(columnToScanIndices).foreach { case (attrGroup, idx) =>
         categorySizes(idx) = attrGroup.size
       }
     }
 
-    val model = new OneHotEncoderModel(uid, categorySizes).setParent(this)
+    val model = new WeightHotEncoderModel(uid, categorySizes).setParent(this)
     copyValues(model)
   }
 
   @Since("2.3.0")
-  override def copy(extra: ParamMap): OneHotEncoderEstimator = defaultCopy(extra)
+  override def copy(extra: ParamMap): WeightHotEncoderEstimator = defaultCopy(extra)
 }
 
 @Since("2.3.0")
-object OneHotEncoderEstimator extends DefaultParamsReadable[OneHotEncoderEstimator] {
+object WeightHotEncoderEstimator extends DefaultParamsReadable[WeightHotEncoderEstimator] {
 
   private[feature] val KEEP_INVALID: String = "keep"
   private[feature] val ERROR_INVALID: String = "error"
   private[feature] val supportedHandleInvalids: Array[String] = Array(KEEP_INVALID, ERROR_INVALID)
 
   @Since("2.3.0")
-  override def load(path: String): OneHotEncoderEstimator = super.load(path)
+  override def load(path: String): WeightHotEncoderEstimator = super.load(path)
 }
 
 /**
@@ -206,18 +216,18 @@ object OneHotEncoderEstimator extends DefaultParamsReadable[OneHotEncoderEstimat
  *                       The array contains one value for each input column, in order.
  */
 @Since("2.3.0")
-class OneHotEncoderModel private[ml] (
+class WeightHotEncoderModel private[ml] (
                                        @Since("2.3.0") override val uid: String,
                                        @Since("2.3.0") val categorySizes: Array[Int])
-  extends Model[OneHotEncoderModel] with OneHotEncoderBase with MLWritable {
+  extends Model[WeightHotEncoderModel] with WeightHotEncoderBase with MLWritable {
 
-  import OneHotEncoderModel._
+  import WeightHotEncoderModel._
 
   // Returns the category size for each index with `dropLast` and `handleInvalid`
   // taken into account.
   private def getConfigedCategorySizes: Array[Int] = {
     val dropLast = getDropLast
-    val keepInvalid = getHandleInvalid == OneHotEncoderEstimator.KEEP_INVALID
+    val keepInvalid = getHandleInvalid == WeightHotEncoderEstimator.KEEP_INVALID
 
     if (!dropLast && keepInvalid) {
       // When `handleInvalid` is "keep", an extra category is added as last category
@@ -234,9 +244,11 @@ class OneHotEncoderModel private[ml] (
   }
 
   private def encoder: UserDefinedFunction = {
-    val keepInvalid = getHandleInvalid == OneHotEncoderEstimator.KEEP_INVALID
+    val keepInvalid = getHandleInvalid == WeightHotEncoderEstimator.KEEP_INVALID
     val configedSizes = getConfigedCategorySizes
     val localCategorySizes = categorySizes
+
+    val weights = getWeights
 
     // The udf performed on input data. The first parameter is the input value. The second
     // parameter is the index in inputCols of the column being encoded.
@@ -252,17 +264,17 @@ class OneHotEncoderModel private[ml] (
           if (label < 0) {
             throw new SparkException(s"Negative value: $label. Input can't be negative. " +
               s"To handle invalid values, set Param handleInvalid to " +
-              s"${OneHotEncoderEstimator.KEEP_INVALID}")
+              s"${WeightHotEncoderEstimator.KEEP_INVALID}")
           } else {
             throw new SparkException(s"Unseen value: $label. To handle unseen values, " +
-              s"set Param handleInvalid to ${OneHotEncoderEstimator.KEEP_INVALID}.")
+              s"set Param handleInvalid to ${WeightHotEncoderEstimator.KEEP_INVALID}.")
           }
         }
       }
 
       val size = configedSizes(colIdx)
       if (idx < size) {
-        Vectors.sparse(size, Array(idx.toInt), Array(1.0))
+        Vectors.sparse(size, Array(idx.toInt), Array(weights(colIdx)))
       } else {
         Vectors.sparse(size, Array.empty[Int], Array.empty[Double])
       }
@@ -285,6 +297,9 @@ class OneHotEncoderModel private[ml] (
   @Since("2.3.0")
   def setHandleInvalid(value: String): this.type = set(handleInvalid, value)
 
+  /** @group setParam */
+  def setWeights(value: Array[Double]): this.type = set(weights, value)
+
   @Since("2.3.0")
   override def transformSchema(schema: StructType): StructType = {
     val inputColNames = $(inputCols)
@@ -293,7 +308,7 @@ class OneHotEncoderModel private[ml] (
       s"The number of input columns ${inputColNames.length} must be the same as the number of " +
         s"features ${categorySizes.length} during fitting.")
 
-    val keepInvalid = $(handleInvalid) == OneHotEncoderEstimator.KEEP_INVALID
+    val keepInvalid = $(handleInvalid) == WeightHotEncoderEstimator.KEEP_INVALID
     val transformedSchema = validateAndTransformSchema(schema, dropLast = $(dropLast),
       keepInvalid = keepInvalid)
     verifyNumOfValues(transformedSchema)
@@ -315,7 +330,7 @@ class OneHotEncoderModel private[ml] (
       // `dropLast` taken into account.
       if (attrGroup.attributes.nonEmpty) {
         val numCategories = configedSizes(idx)
-        require(attrGroup.size == numCategories, "OneHotEncoderModel expected " +
+        require(attrGroup.size == numCategories, "WeightHotEncoderModel expected " +
           s"$numCategories categorical values for input column $inputColName, " +
           s"but the input column had metadata specifying ${attrGroup.size} values.")
       }
@@ -326,7 +341,7 @@ class OneHotEncoderModel private[ml] (
   @Since("2.3.0")
   override def transform(dataset: Dataset[_]): DataFrame = {
     val transformedSchema = transformSchema(dataset.schema, logging = true)
-    val keepInvalid = $(handleInvalid) == OneHotEncoderEstimator.KEEP_INVALID
+    val keepInvalid = $(handleInvalid) == WeightHotEncoderEstimator.KEEP_INVALID
 
     val encodedColumns = $(inputCols).indices.map { idx =>
       val inputColName = $(inputCols)(idx)
@@ -336,7 +351,7 @@ class OneHotEncoderModel private[ml] (
         AttributeGroup.fromStructField(transformedSchema(outputColName))
 
       val metadata = if (outputAttrGroupFromSchema.size < 0) {
-        OneHotEncoderCommon.createAttrGroupForAttrNames(outputColName,
+        WeightHotEncoderCommon.createAttrGroupForAttrNames(outputColName,
           categorySizes(idx), $(dropLast), keepInvalid).toMetadata()
       } else {
         outputAttrGroupFromSchema.toMetadata()
@@ -349,20 +364,20 @@ class OneHotEncoderModel private[ml] (
   }
 
   @Since("2.3.0")
-  override def copy(extra: ParamMap): OneHotEncoderModel = {
-    val copied = new OneHotEncoderModel(uid, categorySizes)
+  override def copy(extra: ParamMap): WeightHotEncoderModel = {
+    val copied = new WeightHotEncoderModel(uid, categorySizes)
     copyValues(copied, extra).setParent(parent)
   }
 
   @Since("2.3.0")
-  override def write: MLWriter = new OneHotEncoderModelWriter(this)
+  override def write: MLWriter = new WeightHotEncoderModelWriter(this)
 }
 
 @Since("2.3.0")
-object OneHotEncoderModel extends MLReadable[OneHotEncoderModel] {
+object WeightHotEncoderModel extends MLReadable[WeightHotEncoderModel] {
 
-  private[OneHotEncoderModel]
-  class OneHotEncoderModelWriter(instance: OneHotEncoderModel) extends MLWriter {
+  private[WeightHotEncoderModel]
+  class WeightHotEncoderModelWriter(instance: WeightHotEncoderModel) extends MLWriter {
 
     private case class Data(categorySizes: Array[Int])
 
@@ -374,34 +389,34 @@ object OneHotEncoderModel extends MLReadable[OneHotEncoderModel] {
     }
   }
 
-  private class OneHotEncoderModelReader extends MLReader[OneHotEncoderModel] {
+  private class WeightHotEncoderModelReader extends MLReader[WeightHotEncoderModel] {
 
-    private val className = classOf[OneHotEncoderModel].getName
+    private val className = classOf[WeightHotEncoderModel].getName
 
-    override def load(path: String): OneHotEncoderModel = {
+    override def load(path: String): WeightHotEncoderModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val dataPath = new Path(path, "data").toString
       val data = sparkSession.read.parquet(dataPath)
         .select("categorySizes")
         .head()
       val categorySizes = data.getAs[Seq[Int]](0).toArray
-      val model = new OneHotEncoderModel(metadata.uid, categorySizes)
+      val model = new WeightHotEncoderModel(metadata.uid, categorySizes)
       metadata.getAndSetParams(model)
       model
     }
   }
 
   @Since("2.3.0")
-  override def read: MLReader[OneHotEncoderModel] = new OneHotEncoderModelReader
+  override def read: MLReader[WeightHotEncoderModel] = new WeightHotEncoderModelReader
 
   @Since("2.3.0")
-  override def load(path: String): OneHotEncoderModel = super.load(path)
+  override def load(path: String): WeightHotEncoderModel = super.load(path)
 }
 
 /**
- * Provides some helper methods used by both `OneHotEncoder` and `OneHotEncoderEstimator`.
+ * Provides some helper methods used by both `WeightHotEncoder` and `WeightHotEncoderEstimator`.
  */
-private[feature] object OneHotEncoderCommon {
+private[feature] object WeightHotEncoderCommon {
 
   private def genOutputAttrNames(inputCol: StructField): Option[Array[String]] = {
     val inputAttr = Attribute.fromStructField(inputCol)
@@ -443,7 +458,7 @@ private[feature] object OneHotEncoderCommon {
   }
 
   /**
-   * Prepares the `StructField` with proper metadata for `OneHotEncoder`'s output column.
+   * Prepares the `StructField` with proper metadata for `WeightHotEncoder`'s output column.
    */
   def transformOutputColumnSchema(
                                    inputCol: StructField,
@@ -489,7 +504,7 @@ private[feature] object OneHotEncoderCommon {
         (0 until numOfColumns).foreach { idx =>
           val x = curValues(idx)
           assert(x <= Int.MaxValue,
-            s"OneHotEncoder only supports up to ${Int.MaxValue} indices, but got $x.")
+            s"WeightHotEncoder only supports up to ${Int.MaxValue} indices, but got $x.")
           assert(x >= 0.0 && x == x.toInt,
             s"Values from column ${inputColNames(idx)} must be indices, but got $x.")
           maxValues(idx) = math.max(maxValues(idx), x)
