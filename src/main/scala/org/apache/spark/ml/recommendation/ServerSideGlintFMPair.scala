@@ -708,7 +708,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @return The general BPR gradients per training instance
    */
   private def computeBPRGradients(sLinear: Array[Float], fFactors: Array[Float]): Array[Float] = {
-    sigmoid(1e-10f - (DenseVector(sLinear) + DenseVector(fFactors))).toArray
+    sigmoid(-(DenseVector(sLinear) + DenseVector(fFactors))).toArray
   }
 
   /**
@@ -730,7 +730,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
     val sUsersMatrix = DenseMatrix(sFactors.slice(0, sLength) :_*)
     val sItemsMatrix = DenseMatrix(sFactors.slice(sLength, sLength * 2) :_*)
     val gMatrix_ = sUsersMatrix * sItemsMatrix.t
-    val gMatrix = sigmoid(1e-10f - (gMatrix_(*,::) + sLinearVector))
+    val gMatrix = sigmoid(-(gMatrix_(*,::) + sLinearVector))
 
     // BPR utility with non-accepted negatives removed
     val ngMatrix = if (na.rows > 1) gMatrix - na *:* gMatrix else gMatrix
@@ -827,13 +827,17 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
       case ((userid: Int, userItemids: BitSet), (itemids, scores)) =>
         val recs = itemids.valuesIterator.zip(scores.valuesIterator)
           .filter { case (itemid, _) => !userItemids.contains(itemid) }
+          .toArray
+          .sortBy { case (_, score) => -score }
           .take(numItems)
-          .map { case (itemid, score) => Row(itemid, score) }.toArray
+          .map { case (itemid, score) => Row(itemid, score) }
         Row(userid, recs)
 
       case (userid: Int, (itemids, scores)) =>
         val recs = itemids.valuesIterator.zip(scores.valuesIterator)
-          .map { case (itemid, score) => Row(itemid, score) }.toArray
+          .toArray
+          .sortBy { case (_, score) => -score }
+          .map { case (itemid, score) => Row(itemid, score) }
         Row(userid, recs)
     }
   }

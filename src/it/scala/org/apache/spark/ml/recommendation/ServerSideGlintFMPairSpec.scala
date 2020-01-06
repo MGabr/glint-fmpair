@@ -394,7 +394,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
     val testquerydata = ServerSideGlintFMPairSpec.toFeatures(
       ServerSideGlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
-      .select(col("userid"), collect_set("itemid").over(Window.partitionBy("userid")).as("filteritemids"))
+      .groupBy("userid")
+      .agg(collect_set("itemid").as("filteritemids"))
       .join(testdata, "userid")
 
     val model = ServerSideGlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
@@ -412,8 +413,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.28
-      ndcg should be > 0.23
+      hitRate should be > 0.31
+      ndcg should be > 0.26
     } finally {
       model.stop(terminateOtherClients=true)
     }
