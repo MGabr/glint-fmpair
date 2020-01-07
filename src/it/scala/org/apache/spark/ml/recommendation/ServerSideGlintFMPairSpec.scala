@@ -7,7 +7,6 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.ml.feature.{OneHotEncoderEstimator, OneHotEncoderModel, VectorAssembler}
 import org.apache.spark.ml.param.{ParamMap, ParamPair}
-import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions._
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
@@ -158,7 +157,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
 
     val fmpair = new ServerSideGlintFMPair()
       .setBatchSize(1024)
-      .setStepSize(0.001f)
+      .setStepSize(0.01f)
       .setLinearReg(0.1f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
@@ -178,7 +177,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
 
     val fmpair = new ServerSideGlintFMPair()
       .setBatchSize(1024)
-      .setStepSize(0.001f)
+      .setStepSize(0.01f)
       .setLinearReg(0.1f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
@@ -310,7 +309,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.35
+      hitRate should be > 0.34
       ndcg should be > 0.27
     } finally {
       model.stop()
@@ -343,8 +342,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be >= 0.32
-      ndcg should be > 0.25
+      hitRate should be > 0.34
+      ndcg should be > 0.27
     } finally {
       model.stop()
     }
@@ -376,8 +375,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.31
-      ndcg should be > 0.26
+      hitRate should be > 0.34
+      ndcg should be > 0.27
     } finally {
       model.stop()
     }
@@ -413,8 +412,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.31
-      ndcg should be > 0.26
+      hitRate should be > 0.34
+      ndcg should be > 0.27
     } finally {
       model.stop(terminateOtherClients=true)
     }

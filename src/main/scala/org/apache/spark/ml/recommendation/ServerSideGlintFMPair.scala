@@ -339,9 +339,10 @@ class ServerSideGlintFMPair(override val uid: String)
     val sampleRow = dataset.select(getUserctxfeaturesCol, getItemfeaturesCol).first()
     val sampleUserctxFeature = sampleRow.getAs[SparseVector](0)
     val sampleItemFeature = sampleRow.getAs[SparseVector](1)
-    val numFeatures = sampleUserctxFeature.size + sampleItemFeature.size
+    val numItemFeatures = sampleItemFeature.size
+    val numFeatures = sampleUserctxFeature.size + numItemFeatures
     val avgActiveItemFeatures = sampleItemFeature.indices.length * 2
-    val avgActiveFeatures = sampleUserctxFeature.indices.length * 2 + avgActiveItemFeatures
+    val avgActiveFeatures = sampleUserctxFeature.indices.length + avgActiveItemFeatures
 
     // get number of possible partitions from available Spark resources
     val spark = dataset.sparkSession
@@ -361,12 +362,12 @@ class ServerSideGlintFMPair(override val uid: String)
     }
 
     @transient
-    val linear = client.fmpairVector(args, numFeatures, avgActiveItemFeatures, 1)
+    val linear = client.fmpairVector(args, numItemFeatures, avgActiveItemFeatures, 1)
     @transient
     val factors = client.fmpairMatrix(args, numFeatures, avgActiveFeatures, getNumParameterServers)
 
     // create and broadcast mapping array of item ids to item features
-    val bcItem2features = dataset.sqlContext.sparkContext.broadcast {
+    val bcItem2features = sc.broadcast {
       dataset
         .select(getItemCol, getItemfeaturesCol)
         .groupBy(getItemCol)
@@ -377,7 +378,7 @@ class ServerSideGlintFMPair(override val uid: String)
     }
 
     // create and broadcast mapping array of item ids to sampling ids - if accepted sampling / sampling column is used
-    val bcItem2sampling = dataset.sqlContext.sparkContext.broadcast {
+    val bcItem2sampling = sc.broadcast {
       if (getSamplingCol.nonEmpty) {
         Some(dataset
           .select(getItemCol, getSamplingCol)
@@ -392,7 +393,7 @@ class ServerSideGlintFMPair(override val uid: String)
     }
 
     // create and broadcast array of item ids sorted by their counts - if exp sampling is used
-    val bcItemsByCount = dataset.sqlContext.sparkContext.broadcast {
+    val bcItemsByCount = sc.broadcast {
       if (getSampler.equals("exp")) {
         Some(dataset
           .select(getItemCol)
@@ -408,8 +409,11 @@ class ServerSideGlintFMPair(override val uid: String)
       }
     }
 
-    dataset
-      .select(getUserCol, getItemCol, getUserctxfeaturesCol)
+    // shift user / context feature indices so that they start after the item feature indices
+    val shift = udf((userctxFeatures: SparseVector) =>
+      new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
+
+    dataset.select(col(getUserCol), col(getItemCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol))
       .repartition(numPartitions, col(getUserCol))  // partition data by users
       .map(row => Interaction(row.getInt(0), row.getInt(1), row.getAs[SparseVector](2)))
       .foreachPartition((iter: Iterator[Interaction]) => {
@@ -780,13 +784,19 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   override def write: MLWriter = new ServerSideGlintFMPairModel.ServerSideGlintFMPairModelWriter(this)
 
   /**
-   * Converts a dataset to a data frame required for this model. Filtering is considered
+   * Converts a dataset to a data frame required for this model. Filtering is considered.
+   * User / context feature indices are shifted so that they start after the item feature indices
    */
   private def toDf(dataset: Dataset[_]): DataFrame = {
+    val numItemFeatures = linear.size.toInt
+    val numFeatures = factors.rows.toInt
+    val shift = udf((userctxFeatures: SparseVector) =>
+      new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
+
     if (getFilterItemsCol.nonEmpty) {
-      dataset.select(getUserCol, getUserctxfeaturesCol, getFilterItemsCol)
+      dataset.select(col(getUserCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol), col(getFilterItemsCol))
     } else {
-      dataset.select(getUserCol, getUserctxfeaturesCol)
+      dataset.select(col(getUserCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol))
     }
   }
 
@@ -813,7 +823,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
    * Converts arrays of user information and score matrices to an iterator of (userCol: Int, recommendations) rows,
    * where recommendations are stored as an array of (itemCol: Int, score: Float) rows.
    *
-   * Only numItems recommendations are returned per user. User items are filtered if filterUserItems is set.
+   * Only numItems recommendations are returned per user and user items are filtered if a filterItemsCol is set
    */
   private def toRowIter(userIds: Array[Int],
                         userItemIds: Array[BitSet],
@@ -869,7 +879,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
         // pull sums of user features
         val topFuture = factors.pullSum(userIndices, userWeights, false).flatMap { case (userFactors, _) =>
 
-          val userMatrix = DenseMatrix(userFactors: _*)
+          val userMatrix = DenseMatrix(userFactors  :_*)
 
           val initialScoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, 0)
           val initialArgMatrix = DenseMatrix.zeros[Int](userMatrix.rows, 0)
@@ -887,13 +897,12 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
               val argBatchMatrix = tile(DenseVector((i * batchSize until (i + 1) * batchSize).toArray),
                 1, userMatrix.rows).t
 
-              // wait until communication with parameter servers for previous batches is finished
-              // this allows already pre-processing the next batch while waiting for the parameter server responses
-              var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
-
               // pull sums of item features of batch
               val itemLinearFuture = linear.pullSum(itemIndices, itemWeights, false)
               val itemFactorsFuture = factors.pullSum(itemIndices, itemWeights, false)
+
+              // wait until communication with parameter servers for previous batches is finished
+              var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
 
               for {
                 (itemLinear, _) <- itemLinearFuture
@@ -901,14 +910,14 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
               } yield {
                 // compute scores for users and all items of batch
                 val itemVector = DenseVector(itemLinear)
-                val itemMatrix = DenseMatrix(itemFactors: _*)
+                val itemMatrix = DenseMatrix(itemFactors :_*)
                 val scoresBatchMatrix_ = userMatrix * itemMatrix.t
                 val scoresBatchMatrix = scoresBatchMatrix_(*, ::) + itemVector
 
                 // concatenate with previous top scores and keep top scores of concatenation
                 val scoresCatMatrix = DenseMatrix.horzcat(scoresMatrix, scoresBatchMatrix)
                 val argCatMatrix = DenseMatrix.horzcat(argMatrix, argBatchMatrix)
-                if (scoresMatrix.cols == 0) { // if first concat then initialize the top matrices properly now
+                if (scoresMatrix.cols == 0) {  // if first concat then initialize the top matrices properly now
                   scoresMatrix = DenseMatrix.zeros[Float](userMatrix.rows, numArgtopItems)
                   argMatrix = DenseMatrix.zeros[Int](userMatrix.rows, numArgtopItems)
                 }
