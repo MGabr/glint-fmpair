@@ -309,8 +309,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.34
-      ndcg should be > 0.27
+      hitRate should be > 0.32
+      ndcg should be > 0.24
     } finally {
       model.stop()
     }
@@ -342,8 +342,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.34
-      ndcg should be > 0.27
+      hitRate should be > 0.32
+      ndcg should be > 0.24
     } finally {
       model.stop()
     }
@@ -375,8 +375,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.34
-      ndcg should be > 0.27
+      hitRate should be > 0.32
+      ndcg should be > 0.24
     } finally {
       model.stop()
     }
@@ -412,8 +412,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.34
-      ndcg should be > 0.27
+      hitRate should be > 0.32
+      ndcg should be > 0.24
     } finally {
       model.stop(terminateOtherClients=true)
     }
