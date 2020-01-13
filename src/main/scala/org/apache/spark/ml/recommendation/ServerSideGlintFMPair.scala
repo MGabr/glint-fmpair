@@ -155,12 +155,12 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 
   /**
    * The mini-batch size
-   * Default: 4096
+   * Default: 1024
    *
    * @group param
    */
   final val batchSize = new IntParam(this, "batchSize", "the mini-batch size", ParamValidators.gt(0))
-  setDefault(batchSize -> 4096)
+  setDefault(batchSize -> 1024)
 
   /** @group getParam */
   def getBatchSize: Int = $(batchSize)
@@ -200,18 +200,6 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 
   /** @group getParam */
   def getFactorsReg: Float = $(factorsReg)
-
-  /**
-   * The initialization mean for the linear and latent factor weights
-   * Default: 0.1f
-   *
-   * @group param
-   */
-  final val initMean = new FloatParam(this, "initMean", "the initialization mean for model weights", ParamValidators.gtEq(0))
-  setDefault(initMean -> 0.1f)
-
-  /** @group getParam */
-  def getInitMean: Float = $(initMean)
 
 
   /**
@@ -316,9 +304,6 @@ class ServerSideGlintFMPair(override val uid: String)
 
   /** @group setParam */
   def setFactorsReg(value: Float): this.type = set(factorsReg, value)
-
-  /** @group setParam */
-  def setInitMean(value: Float): this.type = set(initMean, value)
 
 
   /** @group setParam */
@@ -435,8 +420,8 @@ class ServerSideGlintFMPair(override val uid: String)
         // create mapping of user ids to their set of sampling ids
         val userSamplings = item2sampling.map(i2s => {
           val us = new IntObjectHashMap[BitSet]()  // instead of scala map, essential for performance
-          interactions.groupBy(_.userId).foreach { case (userId, items) =>
-            us.put(userId, BitSet(items.map(i => i2s(i.itemId)) :_*))
+          interactions.groupBy(_.userId).foreach { case (userId, userInteractions) =>
+            us.put(userId, BitSet(userInteractions.map(i => i2s(i.itemId)) :_*))
           }
           us
         })
@@ -566,7 +551,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    * @param interactions The interactions to shuffle
    */
   private def shuffle(random: Random, interactions: Array[Interaction]): Unit = {
-    cforRange(interactions.length - 1 to 0 by -1)(i => {
+    cforRange(interactions.length - 1 until 0 by -1)(i => {
       val j = random.nextInt(i + 1)
       val tmp = interactions(j)
       interactions(j) = interactions(i)
@@ -722,7 +707,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
    *
    * @param sLinear The sums of the linear weights per training instance
    * @param sFactors The sums of the latent factors per training instance
-   * @param na A matrix of shape [batchSize * batchSize] with ones for non-accepted negative items and zeros otherwise
+   * @param na A matrix of shape [batchSize, batchSize] with ones for non-accepted negative items and zeros otherwise
    * @return The linear weight and latent factors gradients per training instance
    */
   private def computeCrossbatchBPRGradients(sLinear: Array[Float],
@@ -740,7 +725,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
     val ngMatrix = if (na.rows > 1) gMatrix - na *:* gMatrix else gMatrix
 
     // linear gradient
-    val gVector = breezeSum(ngMatrix(*,::))  / sLength.toFloat
+    val gVector = breezeSum(ngMatrix(::,*))  / sLength.toFloat
 
     // factors gradient
     val gUsersMatrix = ngMatrix * sItemsMatrix
@@ -748,7 +733,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
     val gCatMatrix = DenseMatrix.vertcat(gUsersMatrix, gItemsMatrix) / sLength.toFloat
 
     // transpose for row-major instead of column-major
-    (gVector.toArray, gCatMatrix.t.toArray.grouped(gCatMatrix.cols).toArray)
+    (gVector.t.toArray, gCatMatrix.t.toArray.grouped(gCatMatrix.cols).toArray)
   }
 }
 
@@ -814,7 +799,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
     val userWeights = userctxFeatures.map(_.values.map(_.toFloat))
 
     val userItemIds = if (getFilterItemsCol.nonEmpty) rows.map(r => BitSet(r.getSeq[Int](2) :_*)) else new Array[BitSet](0)
-    val numArgtopItems = if (getFilterItemsCol.nonEmpty) numItems + userItemIds.map(_.size).max else numItems
+    val numArgtopItems = if (getFilterItemsCol.nonEmpty) numItems + userItemIds.map(_.count(_ => true)).max else numItems
 
     (userIds, userItemIds, userIndices, userWeights, numArgtopItems)
   }
