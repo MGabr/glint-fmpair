@@ -5,7 +5,7 @@ import java.net.InetAddress
 import com.typesafe.config.ConfigFactory
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.ml.feature.{OneHotEncoderEstimator, OneHotEncoderModel, VectorAssembler}
+import org.apache.spark.ml.feature.{OneHotEncoderEstimator, OneHotEncoderModel, VectorAssembler, WeightHotEncoderEstimator, WeightHotEncoderModel}
 import org.apache.spark.ml.param.{ParamMap, ParamPair}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions._
@@ -27,7 +27,7 @@ object ServerSideGlintFMPairSpec {
    * Helper function to convert loaded train dataframe into one-hot encoded user and item feature vectors.
    * Returns fitted one-hot encoders to use for converting loaded test dataframe
    */
-  def toFeatures(data: DataFrame): (DataFrame, OneHotEncoderModel, OneHotEncoderModel, OneHotEncoderModel) = {
+  def toFeatures(data: DataFrame): (DataFrame, OneHotEncoderModel, WeightHotEncoderModel, WeightHotEncoderModel) = {
 
     val userCols = Array("pid", "userid", "category")
     val userEncoderModel = new OneHotEncoderEstimator()
@@ -37,7 +37,9 @@ object ServerSideGlintFMPairSpec {
       .fit(data)
 
     val itemCols = Array("traid", "albid", "artid", "year")
-    val itemEncoderModel = new OneHotEncoderEstimator()
+    val itemWeights = Array(1.0, 1.0, 1.0, 1.0)
+    val itemEncoderModel = new WeightHotEncoderEstimator()
+      .setWeights(itemWeights)
       .setInputCols(itemCols)
       .setOutputCols(itemCols.map(_ + "_encoded"))
       .setDropLast(false)  // missing item features are mapped to the missing feature index
@@ -45,7 +47,9 @@ object ServerSideGlintFMPairSpec {
       .fit(data)
 
     val ctxitemCols = Array("prev_traid", "prev_albid", "prev_artid", "prev_year")
+    val ctxitemWeights = itemWeights.map(w => 0.25 * w)
     val ctxitemEncoderModel = itemEncoderModel.copy(ParamMap(
+      ParamPair(itemEncoderModel.weights, ctxitemWeights),
       ParamPair(itemEncoderModel.inputCols, ctxitemCols),
       ParamPair(itemEncoderModel.outputCols, ctxitemCols.map(_ + "_encoded")),
       ParamPair(itemEncoderModel.dropLast, true)))  // missing user features are simply ignored, no problem for ranking
@@ -60,8 +64,8 @@ object ServerSideGlintFMPairSpec {
    */
   def toFeatures(data: DataFrame,
                  userEncoderModel: OneHotEncoderModel,
-                 itemEncoderModel: OneHotEncoderModel,
-                 ctxitemEncoderModel: OneHotEncoderModel): DataFrame = {
+                 itemEncoderModel: WeightHotEncoderModel,
+                 ctxitemEncoderModel: WeightHotEncoderModel): DataFrame = {
 
     var featuresData = userEncoderModel.transform(data)
       .withColumnRenamed("pid", "userid_")  // keep pid as the user id required for FMPair
@@ -309,7 +313,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.3
+      hitRate should be > 0.31
       ndcg should be > 0.16
     } finally {
       model.stop()
@@ -343,7 +347,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be > 0.26
-      ndcg should be > 0.16
+      ndcg should be > 0.13
     } finally {
       model.stop()
     }
@@ -375,8 +379,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.32
-      ndcg should be > 0.24
+      hitRate should be > 0.31
+      ndcg should be > 0.15
     } finally {
       model.stop()
     }
@@ -412,8 +416,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.32
-      ndcg should be > 0.24
+      hitRate should be > 0.33
+      ndcg should be > 0.21
     } finally {
       model.stop(terminateOtherClients=true)
     }

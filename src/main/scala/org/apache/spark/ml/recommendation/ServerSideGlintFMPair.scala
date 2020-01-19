@@ -470,9 +470,18 @@ class ServerSideGlintFMPair(override val uid: String)
             // convert features to the arrays required by the parameter servers
             val iUser = batch.map(_.userctxFeatures.indices)
             val wUser = batch.map(_.userctxFeatures.values.map(_.toFloat))
-            val iItem = batch.map(i => i.positemFeatures.indices ++ i.negitemFeatures.indices)
-            val wItem = batch.map(i =>
-              i.positemFeatures.values.map(_.toFloat) ++ i.negitemFeatures.values.map(v => (-v).toFloat))
+            val (iItem, wItem) = sampler match {
+              case "uniform" | "exp" =>
+                val i = batch.map(i => i.positemFeatures.indices ++ i.negitemFeatures.indices)
+                val w = batch.map(i => i.positemFeatures.values.map(_.toFloat) ++
+                  i.negitemFeatures.values.map(v => (-v).toFloat))
+                (i, w)
+              case "crossbatch" =>
+                val i = batch.map(_.positemFeatures.indices) ++ batch.map(_.negitemFeatures.indices)
+                val w = batch.map(_.positemFeatures.values.map(_.toFloat)) ++
+                  batch.map(_.negitemFeatures.values.map(_.toFloat))
+                (i, w)
+            }
             (iUser, wUser, iItem, wItem, na)
 
           }.foldLeft(Future.successful(Seq(true))) { case (prevBatchFuture, (iUser, wUser, iItem, wItem, na)) =>
@@ -676,8 +685,9 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
       cforRange(0 until batchSize)(i => {
         val s = samples(i)
         val userId = s.userId
+        val negitemId = s.negitemId
         cforRange(0 until batchSize)(j => {
-          if (userSamplings.get(userId).contains(item2sampling(s.negitemId))) {
+          if (userSamplings.get(userId).contains(item2sampling(negitemId))) {
             na(i)(j) = 1.0f
           }
         })
@@ -713,27 +723,43 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   private def computeCrossbatchBPRGradients(sLinear: Array[Float],
                                             sFactors: Array[Array[Float]],
                                             na: DenseMatrix[Float]): (Array[Float], Array[Array[Float]]) = {
-    // BPR utility
-    val sLength = sFactors.length / 2
-    val sLinearVector = DenseVector(sLinear)
+
+    // parameter server arrays to matrices with vectors added
+    val sLength = sLinear.length / 2
+    val sPosItemsVector = DenseVector(sLinear.slice(0, sLength))
+    val sNegItemsVector = DenseVector(sLinear.slice(sLength, sLength * 2))
     val sUsersMatrix = DenseMatrix(sFactors.slice(0, sLength) :_*)
-    val sItemsMatrix = DenseMatrix(sFactors.slice(sLength, sLength * 2) :_*)
-    val gMatrix_ = sUsersMatrix * sItemsMatrix.t
-    val gMatrix = sigmoid(-(gMatrix_(*,::) + sLinearVector))
+    val sPosItemsMatrix = DenseMatrix(sFactors.slice(sLength, sLength * 2) :_*)
+    val sNegItemsMatrix = DenseMatrix(sFactors.slice(sLength * 2, sLength * 3) :_*)
 
-    // BPR utility with non-accepted negatives removed
-    val ngMatrix = if (na.rows > 1) gMatrix - na *:* gMatrix else gMatrix
+    // BPR utility, with non-accepted negatives removed
+    val nbprMatrix = {
+      val yhatPos_ = sUsersMatrix *:* sPosItemsMatrix
+      val yhatPos = breezeSum(yhatPos_(*,::)) + sPosItemsVector
+      val yhatNeg_ = sUsersMatrix * sNegItemsMatrix.t
+      val yhatNeg = -(yhatNeg_(*,::) + sNegItemsVector)
+      val gz = yhatNeg(::,*) + yhatPos
+      val bpr = sigmoid(-gz)
+      if (na.rows > 1) bpr - na *:* bpr else bpr
+    }
 
-    // linear gradient
-    val gVector = breezeSum(ngMatrix(::,*))  / sLength.toFloat
+    // linear gradients
+    val gPosItemsVector = breezeSum(nbprMatrix(*,::))
+    val gNegItemsVector = -breezeSum(nbprMatrix(::,*))
 
-    // factors gradient
-    val gUsersMatrix = ngMatrix * sItemsMatrix
-    val gItemsMatrix = ngMatrix.t * sUsersMatrix
-    val gCatMatrix = DenseMatrix.vertcat(gUsersMatrix, gItemsMatrix) / sLength.toFloat
+    // factors gradients
+    val gUsersMatrix = {
+      val gPos = sPosItemsMatrix(::,*) *:* gPosItemsVector
+      val gNeg = nbprMatrix * sNegItemsMatrix
+      gPos - gNeg
+    }
+    val gPosItemsMatrix = sUsersMatrix(::,*) *:* gPosItemsVector
+    val gNegItemsMatrix = -(nbprMatrix.t * sUsersMatrix)
 
-    // transpose for row-major instead of column-major
-    (gVector.t.toArray, gCatMatrix.t.toArray.grouped(gCatMatrix.cols).toArray)
+    // gradients to arrays required for parameter servers, transpose for row-major instead of column-major
+    val gCatVector = DenseVector.vertcat(gPosItemsVector, gNegItemsVector.t) / sLength.toFloat
+    val gCatMatrix = DenseMatrix.vertcat(gUsersMatrix, gPosItemsMatrix, gNegItemsMatrix) / sLength.toFloat
+    (gCatVector.toArray, gCatMatrix.t.toArray.grouped(gCatMatrix.cols).toArray)
   }
 }
 
