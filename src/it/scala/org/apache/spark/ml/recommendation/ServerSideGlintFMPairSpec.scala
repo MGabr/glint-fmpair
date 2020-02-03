@@ -314,7 +314,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be > 0.31
-      ndcg should be > 0.16
+      ndcg should be > 0.15
     } finally {
       model.stop()
     }
@@ -347,7 +347,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be > 0.26
-      ndcg should be > 0.13
+      ndcg should be > 0.12
     } finally {
       model.stop()
     }
@@ -380,7 +380,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be > 0.31
-      ndcg should be > 0.15
+      ndcg should be > 0.14
     } finally {
       model.stop()
     }
@@ -417,7 +417,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val ndcg = dcgs.sum / dcgs.length
 
       hitRate should be > 0.33
-      ndcg should be > 0.21
+      ndcg should be > 0.20
     } finally {
       model.stop(terminateOtherClients=true)
     }

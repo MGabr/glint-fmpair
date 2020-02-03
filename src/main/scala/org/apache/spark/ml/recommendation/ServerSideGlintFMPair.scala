@@ -16,7 +16,7 @@ import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
-import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Row, SparkSession}
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
 import spire.implicits.cforRange
 
@@ -325,7 +325,8 @@ class ServerSideGlintFMPair(override val uid: String)
     val sampleUserctxFeature = sampleRow.getAs[SparseVector](0)
     val sampleItemFeature = sampleRow.getAs[SparseVector](1)
     val numItemFeatures = sampleItemFeature.size
-    val numFeatures = sampleUserctxFeature.size + numItemFeatures
+    val numUserctxFeatures = sampleUserctxFeature.size
+    val numFeatures = numItemFeatures + numUserctxFeatures
     val avgActiveItemFeatures = sampleItemFeature.indices.length * 2
     val avgActiveFeatures = sampleUserctxFeature.indices.length + avgActiveItemFeatures
 
@@ -336,6 +337,32 @@ class ServerSideGlintFMPair(override val uid: String)
 
     import spark.implicits._
 
+    // get probabilities of features
+    def aggFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
+      featureDf
+        .rdd
+        .map(r => r.getAs[SparseVector](0))
+        .aggregate(new Array[Long](numFeatures))(
+          (counts, v) => {
+            for (i <- v.indices) {
+              counts(i) += 1L
+            }
+            counts
+          }, (counts1, counts2) => {
+            for (i <- counts2.indices) {
+              counts1(i) += counts2(i)
+            }
+            counts1
+          })
+        .map(count => (count.toDouble / dfCount.toDouble).toFloat)
+    }
+
+    val datasetCount = dataset.count()
+    val userctxFeatureProbs = aggFeatureProbs(dataset.select(getUserctxfeaturesCol), numUserctxFeatures, datasetCount)
+    val itemFeatureProbs = aggFeatureProbs(dataset.select(getItemfeaturesCol), numItemFeatures, datasetCount)
+    val featureProbs = itemFeatureProbs ++ userctxFeatureProbs
+
+    // create parameter server vector and matrices
     @transient
     implicit val ec = ExecutionContext.Implicits.global
 
@@ -347,9 +374,11 @@ class ServerSideGlintFMPair(override val uid: String)
     }
 
     @transient
-    val linear = client.fmpairVector(args, numItemFeatures, avgActiveItemFeatures, 1)
+    val linear = client.fmpairVector(args, itemFeatureProbs, sc.hadoopConfiguration, numPartitions,
+      avgActiveItemFeatures)
     @transient
-    val factors = client.fmpairMatrix(args, numFeatures, avgActiveFeatures, getNumParameterServers)
+    val factors = client.fmpairMatrix(args, featureProbs, sc.hadoopConfiguration, numPartitions, avgActiveFeatures,
+      getNumParameterServers)
 
     // create and broadcast mapping array of item ids to item features
     val bcItem2features = sc.broadcast {
@@ -1010,16 +1039,21 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
              path: String,
              parameterServerHost: String,
              parameterServerConfig: Config): ServerSideGlintFMPairModel = {
+
       val config = Client.getHostConfig(parameterServerHost).withFallback(parameterServerConfig)
       val client = if (parameterServerHost.isEmpty) {
         Client.runOnSpark(sc, config, Client.getNumExecutors(sc), Client.getExecutorCores(sc))
       } else {
         Client(config)
       }
-      val linear = client.loadFMPairVector(path + "/linear", sc.hadoopConfiguration)
-      val factors = client.loadFMPairMatrix(path + "/factors", sc.hadoopConfiguration)
+
+      val numPartitions = Client.getNumExecutors(sc) * Client.getExecutorCores(sc)
+      val linear = client.loadFMPairVector(path + "/linear", sc.hadoopConfiguration, numPartitions)
+      val factors = client.loadFMPairMatrix(path + "/factors", sc.hadoopConfiguration, numPartitions)
+
       val itemFeatures = sc.objectFile[SparseVector](path + "/itemfeatures", minPartitions = 1).collect()
       val bcItemFeatures = sc.broadcast(itemFeatures)
+
       val model = new ServerSideGlintFMPairModel(metadata.uid, bcItemFeatures, linear, factors, client)
       metadata.getAndSetParams(model)
       model.set(model.parameterServerHost, parameterServerHost)
