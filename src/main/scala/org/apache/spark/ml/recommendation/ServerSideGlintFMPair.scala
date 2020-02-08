@@ -1,11 +1,11 @@
 package org.apache.spark.ml.recommendation
 
-import breeze.linalg.{sum => breezeSum, _}
+import breeze.linalg.{sum => breezeSum, rank => breezeRank, _}
 import breeze.numerics.sigmoid
 import com.typesafe.config._
 import glint.models.client.{BigFMPairMatrix, BigFMPairVector}
 import glint.{Client, FMPairArguments}
-import org.apache.spark.TaskContext
+import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
 import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
@@ -14,6 +14,7 @@ import org.apache.spark.ml.recommendation.ServerSideGlintFMPair.{Interaction, Sa
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Row, SparkSession}
@@ -315,125 +316,34 @@ class ServerSideGlintFMPair(override val uid: String)
   /** @group setParam */
   def setParameterServerConfig(value: Config): this.type = set(parameterServerConfig, value.resolve())
 
-
+  /**
+   * Fits a [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]] on the data set
+   *
+   * @param dataset The data set containing columns (userCol: Int, itemCol: Int, itemFeaturesCol: SparseVector,
+   *                userctxFeaturesCol: SparseVector) and if acceptance sampling should be used also samplingCol.
+   */
   override def fit(dataset: Dataset[_]): ServerSideGlintFMPairModel = {
 
-    val args = FMPairArguments(getNumDims, getBatchSize, getStepSize.toFloat, getLinearReg, getFactorsReg)
+    val (df, dfItem2features, itemFeatureProbs, featureProbs, avgActiveFeatures) = computeFeatureProbs(dataset)
 
-    // get number of features and estimation for average number of features from a sampled first row
-    val sampleRow = dataset.select(getUserctxfeaturesCol, getItemfeaturesCol).first()
-    val sampleUserctxFeature = sampleRow.getAs[SparseVector](0)
-    val sampleItemFeature = sampleRow.getAs[SparseVector](1)
-    val numItemFeatures = sampleItemFeature.size
-    val numUserctxFeatures = sampleUserctxFeature.size
-    val numFeatures = numItemFeatures + numUserctxFeatures
-    val avgActiveItemFeatures = sampleItemFeature.indices.length * 2
-    val avgActiveFeatures = sampleUserctxFeature.indices.length + avgActiveItemFeatures
-
-    // get number of possible partitions from available Spark resources
-    val spark = dataset.sparkSession
-    val sc = spark.sparkContext
-    val numPartitions = Client.getNumExecutors(sc) * Client.getExecutorCores(sc)
-
+    val spark = df.sparkSession
     import spark.implicits._
-
-    // get probabilities of features
-    def aggFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
-      featureDf
-        .rdd
-        .map(r => r.getAs[SparseVector](0))
-        .aggregate(new Array[Long](numFeatures))(
-          (counts, v) => {
-            for (i <- v.indices) {
-              counts(i) += 1L
-            }
-            counts
-          }, (counts1, counts2) => {
-            for (i <- counts2.indices) {
-              counts1(i) += counts2(i)
-            }
-            counts1
-          })
-        .map(count => (count.toDouble / dfCount.toDouble).toFloat)
-    }
-
-    val datasetCount = dataset.count()
-    val userctxFeatureProbs = aggFeatureProbs(dataset.select(getUserctxfeaturesCol), numUserctxFeatures, datasetCount)
-    val itemFeatureProbs = aggFeatureProbs(dataset.select(getItemfeaturesCol), numItemFeatures, datasetCount)
-    val featureProbs = itemFeatureProbs ++ userctxFeatureProbs
-
-    // create parameter server vector and matrices
-    @transient
-    implicit val ec = ExecutionContext.Implicits.global
+    val sc = spark.sparkContext
+    val numWorkers = Client.getNumExecutors(sc)
+    val numWorkerCores = Client.getExecutorCores(sc)
 
     @transient
-    val client = if (getParameterServerHost.isEmpty) {
-      Client.runOnSpark(sc, getParameterServerConfig, getNumParameterServers, Client.getExecutorCores(sc))
-    } else {
-      Client(Client.getHostConfig(getParameterServerHost).withFallback(getParameterServerConfig))
-    }
+    val (client, linear, factors) = initParameterServers(sc, itemFeatureProbs, featureProbs, avgActiveFeatures,
+      numWorkers, numWorkerCores)
 
-    @transient
-    val linear = client.fmpairVector(args, itemFeatureProbs, sc.hadoopConfiguration, numPartitions,
-      avgActiveItemFeatures)
-    @transient
-    val factors = client.fmpairMatrix(args, featureProbs, sc.hadoopConfiguration, numPartitions, avgActiveFeatures,
-      getNumParameterServers)
+    val bcItem2features = broadcastItem2features(sc, dfItem2features)
+    val bcItemsByCount = broadcastItemsByCount(sc, df)
+    val bcItem2sampling = broadcastItem2sampling(sc, df)
 
-    // create and broadcast mapping array of item ids to item features
-    val bcItem2features = sc.broadcast {
-      dataset
-        .select(getItemCol, getItemfeaturesCol)
-        .groupBy(getItemCol)
-        .agg(first(getItemfeaturesCol).as(getItemfeaturesCol))
-        .sort(getItemCol)
-        .collect()
-        .map(_.getAs[SparseVector](getItemfeaturesCol))
-    }
-
-    // create and broadcast mapping array of item ids to sampling ids - if accepted sampling / sampling column is used
-    val bcItem2sampling = sc.broadcast {
-      if (getSamplingCol.nonEmpty) {
-        Some(dataset
-          .select(getItemCol, getSamplingCol)
-          .groupBy(getItemCol)
-          .agg(first(getSamplingCol))
-          .sort(getItemCol)
-          .collect()
-          .map(_.getInt(1)))
-      } else {
-        None
-      }
-    }
-
-    // create and broadcast array of item ids sorted by their counts - if exp sampling is used
-    val bcItemsByCount = sc.broadcast {
-      if (getSampler.equals("exp")) {
-        Some(dataset
-          .select(getItemCol)
-          .groupBy(getItemCol)
-          .count()
-          .sort(desc("count"))
-          .select(getItemCol)
-          .rdd
-          .map(row => row.getInt(0))
-          .collect())
-      } else {
-        None
-      }
-    }
-
-    // shift user / context feature indices so that they start after the item feature indices
-    val shift = udf((userctxFeatures: SparseVector) =>
-      new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
-
-    dataset.select(col(getUserCol), col(getItemCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol))
-      .repartition(numPartitions, col(getUserCol))  // partition data by users
+    df.select(getUserCol, getItemCol, getUserctxfeaturesCol)
+      .repartition(numWorkers * numWorkerCores, col(getUserCol))  // partition data frame by users
       .map(row => Interaction(row.getInt(0), row.getInt(1), row.getAs[SparseVector](2)))
       .foreachPartition((iter: Iterator[Interaction]) => {
-
-        @transient
-        implicit val ec = ExecutionContext.Implicits.global
 
         val interactions = iter.toArray
 
@@ -469,6 +379,9 @@ class ServerSideGlintFMPair(override val uid: String)
           }
         }
 
+        @transient
+        implicit val ec = ExecutionContext.Implicits.global
+
         // now the actual fit pipeline
         val fitFinishedFuture = (0 until epochs).iterator
           .flatMap { epoch =>
@@ -479,9 +392,7 @@ class ServerSideGlintFMPair(override val uid: String)
 
             val random = new Random(seed + TaskContext.getPartitionId() + epoch)
             ServerSideGlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
-            interactions
-              .grouped(batchSize)  // group into batches
-              .map(i => sample(random, i))  // sample negative items
+            interactions.grouped(batchSize).map(i => sample(random, i))  // group into batches and sample negative items
 
           }.map {
             // add dummy non-acceptance matrix if necessary
@@ -553,7 +464,220 @@ class ServerSideGlintFMPair(override val uid: String)
         ()
       })
 
+    bcItemsByCount.destroy()
+    bcItem2sampling.destroy()
+
     copyValues(new ServerSideGlintFMPairModel(this.uid, bcItem2features, linear, factors, client).setParent(this))
+  }
+
+  /**
+   * Converts a data set to data frames required for this model and computes the feature probabilities.
+   * If the features have separate index ranges, the user / context feature indices are shifted
+   * so that they start after the item feature indices
+   *
+   * @return The possibly shifted data frame, the unique item id - item features data frame,
+   *         the item feature probabilities, the whole feature probabilities and the average number of active features
+   */
+  private def computeFeatureProbs(dataset: Dataset[_]): (DataFrame, DataFrame, Array[Float], Array[Float], Int) = {
+
+    // get number of features from a sampled first row
+    val sampleRow = dataset.select(getItemfeaturesCol, getUserctxfeaturesCol).first()
+    val numItemFeatures = sampleRow.getAs[SparseVector](0).size
+    val numUserctxFeatures = sampleRow.getAs[SparseVector](1).size
+    val numFeatures = if (numItemFeatures == numUserctxFeatures) {
+      numItemFeatures
+    } else {
+      numItemFeatures + numUserctxFeatures
+    }
+
+    // convert to possibly shifted data frame
+    var cols = Array(col(getUserCol), col(getItemCol), col(getItemfeaturesCol))
+    if (numItemFeatures == numFeatures) {
+      cols = cols :+ col(getUserctxfeaturesCol)
+    } else {
+      val shift = udf((userctxFeatures: SparseVector) =>
+        new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
+      cols = cols :+ shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol)
+    }
+    if (getSamplingCol.nonEmpty && getSamplingCol != getItemCol) {
+      cols = cols :+ col(getSamplingCol)
+    }
+    val df = dataset.select(cols :_*)
+
+    // compute unique item id - item features data frame
+    val dfItem2features = df
+      .select(getItemCol, getItemfeaturesCol)
+      .groupBy(getItemCol)
+      .agg(first(getItemfeaturesCol).as(getItemfeaturesCol))
+
+    // compute feature probabilities
+    val dfCount = df.count()
+    val featureProbs = aggFeatureProbs(df.select(getItemfeaturesCol), numFeatures, dfCount)
+    val negItemFeatureProbs = computeNegItemFeatureProbs(df, dfItem2features, numFeatures)
+    val userctxFeatureProbs = aggFeatureProbs(df.select(getUserctxfeaturesCol), numFeatures, dfCount)
+    for (i <- featureProbs.indices) {
+      featureProbs(i) += negItemFeatureProbs(i)
+      featureProbs(i) += userctxFeatureProbs(i)
+    }
+    val avgActiveFeatures = featureProbs.sum.toInt
+
+    (df, dfItem2features, featureProbs.slice(0, numItemFeatures), featureProbs, avgActiveFeatures)
+  }
+
+  /**
+   * Computes the negative item feature probabilities for the used sampling method
+   */
+  private def computeNegItemFeatureProbs(df: DataFrame,
+                                         dfItem2features: DataFrame,
+                                         numFeatures: Int): Array[Float] = {
+
+    val itemCount = dfItem2features.count()
+
+    if (getSampler.equals("exp")) {
+      val rho = getRho
+      val exp = udf((rank: Int) => -(rank.toDouble + 1) / (itemCount.toDouble * rho.toDouble))
+
+      var dfItems2Exp = df
+        .select(getItemCol, getItemfeaturesCol)
+        .groupBy(getItemCol)
+        .agg(count(getItemfeaturesCol).as("count"), first(getItemfeaturesCol).as(getItemfeaturesCol))
+        .select(exp(rank().over(Window.orderBy(desc("count")))).as("exp"), col(getItemfeaturesCol))
+
+      val expSum = dfItems2Exp.select("exp").groupBy().sum().first.get(0)
+
+      dfItems2Exp = dfItems2Exp.select(col("exp").divide(expSum), col(getItemfeaturesCol))
+
+      aggWeightedFeatureProbs(dfItems2Exp, numFeatures, itemCount)
+    } else {
+      aggFeatureProbs(dfItem2features.select(getItemfeaturesCol), numFeatures, itemCount)
+    }
+  }
+
+  /**
+   * Aggregates a data frame of sparse vectors to compute the probabilities of the active features
+   */
+  private def aggFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
+    featureDf
+      .rdd
+      .map(r => r.getAs[SparseVector](0))
+      .aggregate(new Array[Long](numFeatures))(
+        (counts, v) => {
+          for (i <- v.indices) {
+            counts(i) += 1L
+          }
+          counts
+        }, (counts1, counts2) => {
+          for (i <- counts2.indices) {
+            counts1(i) += counts2(i)
+          }
+          counts1
+        })
+      .map(count => (count.toDouble / dfCount.toDouble).toFloat)
+  }
+
+  /**
+   * Aggregates a data frame of double weightings and sparse vectors
+   * to compute the weighted probabilities of the active features
+   */
+  private def aggWeightedFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
+    featureDf
+      .rdd
+      .map(r => (r.getDouble(0), r.getAs[SparseVector](1)))
+      .aggregate(new Array[Double](numFeatures))(
+        (counts, t) => {
+          val (w, v) = t
+          for (i <- v.indices) {
+            counts(i) += w
+          }
+          counts
+        }, (counts1, counts2) => {
+          for (i <- counts2.indices) {
+            counts1(i) += counts2(i)
+          }
+          counts1
+        })
+      .map(count => (count / dfCount.toDouble).toFloat)
+  }
+
+  /**
+   * Initializes parameter server client, vector and matrices
+   */
+  private def initParameterServers(sc: SparkContext,
+                                   itemFeatureProbs: Array[Float],
+                                   featureProbs: Array[Float],
+                                   avgActiveFeatures: Int,
+                                   numWorkers: Int,
+                                   numWorkerCores: Int): (Client, BigFMPairVector, BigFMPairMatrix) = {
+
+    implicit val ec = ExecutionContext.Implicits.global
+
+    val client = if (getParameterServerHost.isEmpty) {
+      Client.runOnSpark(sc, getParameterServerConfig, getNumParameterServers, numWorkers)
+    } else {
+      Client(Client.getHostConfig(getParameterServerHost).withFallback(getParameterServerConfig))
+    }
+
+    val args = FMPairArguments(getNumDims, getBatchSize, getStepSize.toFloat, getLinearReg, getFactorsReg)
+
+    val linear = client.fmpairVector(args, itemFeatureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
+      avgActiveFeatures)
+    val factors = client.fmpairMatrix(args, featureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
+      avgActiveFeatures, getNumParameterServers)
+
+    (client, linear, factors)
+  }
+
+  /**
+   * Creates and broadcasts a mapping array of item ids to item features
+   */
+  private def broadcastItem2features(sc: SparkContext, dfItem2features: DataFrame): Broadcast[Array[SparseVector]] = {
+    sc.broadcast {
+      dfItem2features
+        .sort(getItemCol)
+        .collect()
+        .map(_.getAs[SparseVector](getItemfeaturesCol))
+    }
+  }
+
+  /**
+   * Creates and broadcasts an array of item ids sorted by their counts ... if exp sampling is used
+   */
+  private def broadcastItemsByCount(sc: SparkContext, df: DataFrame): Broadcast[Option[Array[Int]]] = {
+    sc.broadcast {
+      if (getSampler.equals("exp")) {
+        Some(df
+          .select(getItemCol)
+          .groupBy(getItemCol)
+          .count()
+          .sort(desc("count"))
+          .select(getItemCol)
+          .rdd
+          .map(row => row.getInt(0))
+          .collect())
+      } else {
+        None
+      }
+    }
+  }
+
+  /**
+   * Creates and broadcasts a mapping array of item ids to sampling ids ...
+   * if accepted sampling / sampling column is used
+   */
+  private def broadcastItem2sampling(sc: SparkContext, df: DataFrame): Broadcast[Option[Array[Int]]] = {
+    sc.broadcast {
+      if (getSamplingCol.nonEmpty) {
+        Some(df
+          .select(getItemCol, getSamplingCol)
+          .groupBy(getItemCol)
+          .agg(first(getSamplingCol))
+          .sort(getItemCol)
+          .collect()
+          .map(_.getInt(1)))
+      } else {
+        None
+      }
+    }
   }
 
   override def copy(extra: ParamMap): Estimator[ServerSideGlintFMPairModel] = defaultCopy(extra)
@@ -576,13 +700,13 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   /** An interaction from the training instances, combined with a sampled negative interaction */
   private case class SampledInteraction(userId: Int, positemId: Int, negitemId: Int, userctxFeatures: SparseVector)
 
-  /** The features of a positive interaction from the training instances and a negative interaction */
+  /** The features of a positive interaction from the training instances and a sampled negative interaction */
   private case class SampledFeatures(userctxFeatures: SparseVector,
                                      positemFeatures: SparseVector,
                                      negitemFeatures: SparseVector)
 
   /**
-   * Sample positive items / interactions by shuffling the interactions in-place.
+   * Samples positive items / interactions by shuffling the interactions in-place.
    * Uses Fisher-Yates shuffle algorithm
    *
    * @param random The random number generator to use
@@ -598,7 +722,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Sample negative items uniformly, accepting all items as negative items
+   * Samples negative items uniformly, accepting all items as negative items
    *
    * @param numItems The number of user ids
    * @return A sampler function creating an array of sampled interactions
@@ -614,7 +738,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Sample negative items with probabilities proportional to the exponential popularity distribution from LambdaFM,
+   * Samples negative items with probabilities proportional to the exponential popularity distribution from LambdaFM,
    * accepting all items as negative items. Uses inverse transformation sampling from truncated exponential distribution
    *
    * @param itemsByCount The item indices ordered by descending popularity / occurrence count
@@ -637,7 +761,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Sample negative items uniformly
+   * Samples negative items uniformly
    *
    * @param userSamplings The mapping of user ids to their set of sampling ids
    * @param item2sampling The mapping of item ids to their sampling id
@@ -661,7 +785,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Sample negative items with probabilities proportional to the exponential popularity distribution from LambdaFM.
+   * Samples negative items with probabilities proportional to the exponential popularity distribution from LambdaFM.
    * Uses inverse transformation sampling from truncated exponential distribution
    *
    * @param userSamplings The mapping of user ids to their set of sampling ids
@@ -691,7 +815,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Sample negative items uniformly and return matrix of non-accepted negative items across batch
+   * Samples negative items uniformly and return matrix of non-accepted negative items across batch
    *
    * @param userSamplings The mapping of user ids to their set of sampling ids
    * @param item2sampling The mapping of item ids to their sampling id
@@ -740,7 +864,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 
   /**
-   * Compute gradients according to crossbatch-BPR loss.
+   * Computes gradients according to crossbatch-BPR loss.
    * This can be computationally expensive (batchSize*batchSize*numDims) as a matrix multiplication is required.
    * An optimized BLAS library is therefore recommended
    *
@@ -753,7 +877,7 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
                                             sFactors: Array[Array[Float]],
                                             na: DenseMatrix[Float]): (Array[Float], Array[Array[Float]]) = {
 
-    // parameter server arrays to matrices with vectors added
+    // parameter server arrays to vectors and matrices
     val sLength = sLinear.length / 2
     val sPosItemsVector = DenseVector(sLinear.slice(0, sLength))
     val sNegItemsVector = DenseVector(sLinear.slice(sLength, sLength * 2))
@@ -824,20 +948,27 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   override def write: MLWriter = new ServerSideGlintFMPairModel.ServerSideGlintFMPairModelWriter(this)
 
   /**
-   * Converts a dataset to a data frame required for this model. Filtering is considered.
-   * User / context feature indices are shifted so that they start after the item feature indices
+   * Converts a data set to a data frame required for this model. Filtering is considered.
+   * If the features have separate index ranges, the user / context feature indices are shifted
+   * so that they start after the item feature indices
    */
   private def toDf(dataset: Dataset[_]): DataFrame = {
+
     val numItemFeatures = linear.size.toInt
     val numFeatures = factors.rows.toInt
-    val shift = udf((userctxFeatures: SparseVector) =>
-      new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
 
-    if (getFilterItemsCol.nonEmpty) {
-      dataset.select(col(getUserCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol), col(getFilterItemsCol))
+    var cols = Array(col(getUserCol))
+    if (numItemFeatures == numFeatures) {
+      cols = cols :+ col(getUserctxfeaturesCol)
     } else {
-      dataset.select(col(getUserCol), shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol))
+      val shift = udf((userctxFeatures: SparseVector) =>
+        new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
+      cols = cols :+ shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol)
     }
+    if (getFilterItemsCol.nonEmpty) {
+      cols = cols :+ col(getFilterItemsCol)
+    }
+    dataset.select(cols :_*)
   }
 
   /**
@@ -896,7 +1027,7 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
    * Returns top numItems items recommended for each user id in the input data set
    *
    * @param dataset The dataset containing a column of user ids and user context features. The column names must match
-   *                userCol, userctxfeaturesCol and, if filtering should be used, also filterItemsCol.
+   *                userCol, userctxFeaturesCol and, if filtering should be used, also filterItemsCol.
    * @param numItems The maximum number of recommendations for each user
    * @return A dataframe of (userCol: Int, recommendations), where recommendations are stored
    *         as an array of (itemCol: Int, score: Float) rows.

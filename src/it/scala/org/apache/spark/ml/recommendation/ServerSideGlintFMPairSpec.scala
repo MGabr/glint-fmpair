@@ -160,9 +160,9 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
 
     val fmpair = new ServerSideGlintFMPair()
-      .setBatchSize(1024)
+      .setBatchSize(256)
       .setStepSize(0.01f)
-      .setLinearReg(0.1f)
+      .setLinearReg(0.01f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
 
@@ -180,9 +180,9 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
 
     val fmpair = new ServerSideGlintFMPair()
-      .setBatchSize(1024)
+      .setBatchSize(256)
       .setStepSize(0.01f)
-      .setLinearReg(0.1f)
+      .setLinearReg(0.01f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
       .setSampler("exp")
@@ -202,9 +202,9 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
 
     val fmpair = new ServerSideGlintFMPair()
-      .setBatchSize(1024)
+      .setBatchSize(256)
       .setStepSize(0.1f)
-      .setLinearReg(0.1f)
+      .setLinearReg(0.01f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
       .setParameterServerHost(InetAddress.getLocalHost.getHostAddress)
@@ -231,8 +231,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val model = ServerSideGlintFMPairModel.load(modelPath)
     try {
 
-      model.getBatchSize shouldBe 1024
-      model.getLinearReg shouldBe 0.1f
+      model.getBatchSize shouldBe 256
+      model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f
       model.getMaxIter shouldBe 1000
       model.getNumParameterServers shouldBe 2
@@ -249,8 +249,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val model = ServerSideGlintFMPairModel.load(modelPath, InetAddress.getLocalHost.getHostAddress, separateGlintConfig)
     try {
 
-      model.getBatchSize shouldBe 1024
-      model.getLinearReg shouldBe 0.1f
+      model.getBatchSize shouldBe 256
+      model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f
       model.getMaxIter shouldBe 1000
       model.getNumParameterServers shouldBe 2
@@ -271,8 +271,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     val model = ServerSideGlintFMPairModel.load(separateGlintModelPath)
     try {
 
-      model.getBatchSize shouldBe 1024
-      model.getLinearReg shouldBe 0.1f
+      model.getBatchSize shouldBe 256
+      model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f
       model.getMaxIter shouldBe 100
       model.getNumParameterServers shouldBe 2
@@ -313,8 +313,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.31
-      ndcg should be > 0.15
+      hitRate should be > 0.35
+      ndcg should be > 0.12
     } finally {
       model.stop()
     }
@@ -346,8 +346,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.26
-      ndcg should be > 0.12
+      hitRate should be > 0.31
+      ndcg should be > 0.09
     } finally {
       model.stop()
     }
@@ -379,8 +379,8 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.31
-      ndcg should be > 0.14
+      hitRate should be > 0.35
+      ndcg should be > 0.12
     } finally {
       model.stop()
     }
@@ -416,7 +416,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
       val ndcg = dcgs.sum / dcgs.length
 
-      hitRate should be > 0.33
+      hitRate should be > 0.35
       ndcg should be > 0.20
     } finally {
       model.stop(terminateOtherClients=true)
