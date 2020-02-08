@@ -10,7 +10,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
 import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
 import org.apache.spark.ml.param._
-import org.apache.spark.ml.recommendation.ServerSideGlintFMPair.{Interaction, SampledFeatures, SampledInteraction}
+import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, SampledFeatures, SampledInteraction}
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
@@ -26,7 +26,7 @@ import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Random
 
-private[recommendation] trait ServerSideGlintFMPairParams extends Params with HasMaxIter with HasStepSize with HasSeed
+private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter with HasStepSize with HasSeed
   with HasPredictionCol {
 
   /**
@@ -257,8 +257,8 @@ private[recommendation] trait ServerSideGlintFMPairParams extends Params with Ha
 }
 
 
-class ServerSideGlintFMPair(override val uid: String)
-  extends Estimator[ServerSideGlintFMPairModel] with ServerSideGlintFMPairParams with DefaultParamsWritable {
+class GlintFMPair(override val uid: String)
+  extends Estimator[GlintFMPairModel] with GlintFMPairParams with DefaultParamsWritable {
 
   def this() = this(Identifiable.randomUID("glint-fmpair"))
 
@@ -317,12 +317,12 @@ class ServerSideGlintFMPair(override val uid: String)
   def setParameterServerConfig(value: Config): this.type = set(parameterServerConfig, value.resolve())
 
   /**
-   * Fits a [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]] on the data set
+   * Fits a [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]] on the data set
    *
    * @param dataset The data set containing columns (userCol: Int, itemCol: Int, itemFeaturesCol: SparseVector,
    *                userctxFeaturesCol: SparseVector) and if acceptance sampling should be used also samplingCol.
    */
-  override def fit(dataset: Dataset[_]): ServerSideGlintFMPairModel = {
+  override def fit(dataset: Dataset[_]): GlintFMPairModel = {
 
     val (df, dfItem2features, itemFeatureProbs, featureProbs, avgActiveFeatures) = computeFeatureProbs(dataset)
 
@@ -368,14 +368,14 @@ class ServerSideGlintFMPair(override val uid: String)
         // create sampling function to use
         val sample = if (item2sampling.isDefined) {
           sampler match {
-            case "uniform" => ServerSideGlintFMPair.uniformSampler(userSamplings.get, item2sampling.get)
-            case "exp" => ServerSideGlintFMPair.expSampler(userSamplings.get, item2sampling.get, itemsByCount.get, getRho)
-            case "crossbatch" => ServerSideGlintFMPair.crossbatchSampler(userSamplings.get, item2sampling.get)
+            case "uniform" => GlintFMPair.uniformSampler(userSamplings.get, item2sampling.get)
+            case "exp" => GlintFMPair.expSampler(userSamplings.get, item2sampling.get, itemsByCount.get, getRho)
+            case "crossbatch" => GlintFMPair.crossbatchSampler(userSamplings.get, item2sampling.get)
           }
         } else {
           sampler match {
-            case "uniform" | "crossbatch" => ServerSideGlintFMPair.uniformAllSampler(item2features.length)
-            case "exp" => ServerSideGlintFMPair.expAllSampler(itemsByCount.get, getRho)
+            case "uniform" | "crossbatch" => GlintFMPair.uniformAllSampler(item2features.length)
+            case "exp" => GlintFMPair.expAllSampler(itemsByCount.get, getRho)
           }
         }
 
@@ -391,7 +391,7 @@ class ServerSideGlintFMPair(override val uid: String)
             }
 
             val random = new Random(seed + TaskContext.getPartitionId() + epoch)
-            ServerSideGlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
+            GlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
             interactions.grouped(batchSize).map(i => sample(random, i))  // group into batches and sample negative items
 
           }.map {
@@ -438,7 +438,7 @@ class ServerSideGlintFMPair(override val uid: String)
                   (sLinear, cacheKeysLinear) <- batchFutureLinear
                   (fFactors, cacheKeysFactors) <- batchFutureFactors
                 } yield {
-                  val g = ServerSideGlintFMPair.computeBPRGradients(sLinear, fFactors)
+                  val g = GlintFMPair.computeBPRGradients(sLinear, fFactors)
                   Future.sequence(Seq(linear.pushSum(g, cacheKeysLinear), factors.adjust(g, cacheKeysFactors)))
                 }
                 batchFuture.flatMap(identity)
@@ -450,7 +450,7 @@ class ServerSideGlintFMPair(override val uid: String)
                   (sLinear, cacheKeysLinear) <- batchFutureLinear
                   (sFactors, cacheKeysFactors) <- batchFutureFactors
                 } yield {
-                  val (gLinear, gFactors) = ServerSideGlintFMPair.computeCrossbatchBPRGradients(sLinear, sFactors, na)
+                  val (gLinear, gFactors) = GlintFMPair.computeCrossbatchBPRGradients(sLinear, sFactors, na)
                   Future.sequence(Seq(
                     linear.pushSum(gLinear, cacheKeysLinear),
                     factors.pushSum(gFactors, cacheKeysFactors)))
@@ -467,7 +467,7 @@ class ServerSideGlintFMPair(override val uid: String)
     bcItemsByCount.destroy()
     bcItem2sampling.destroy()
 
-    copyValues(new ServerSideGlintFMPairModel(this.uid, bcItem2features, linear, factors, client).setParent(this))
+    copyValues(new GlintFMPairModel(this.uid, bcItem2features, linear, factors, client).setParent(this))
   }
 
   /**
@@ -680,7 +680,7 @@ class ServerSideGlintFMPair(override val uid: String)
     }
   }
 
-  override def copy(extra: ParamMap): Estimator[ServerSideGlintFMPairModel] = defaultCopy(extra)
+  override def copy(extra: ParamMap): Estimator[GlintFMPairModel] = defaultCopy(extra)
 
   override def transformSchema(schema: StructType): StructType = {
     SchemaUtils.checkColumnType(schema, getUserCol, IntegerType)
@@ -692,7 +692,7 @@ class ServerSideGlintFMPair(override val uid: String)
 }
 
 
-object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair] {
+object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
 
   /** An interaction from the training instances */
   private case class Interaction(userId: Int, itemId: Int, userctxFeatures: SparseVector)
@@ -916,12 +916,12 @@ object ServerSideGlintFMPair extends DefaultParamsReadable[ServerSideGlintFMPair
   }
 }
 
-class ServerSideGlintFMPairModel private[ml](override val uid: String,
+class GlintFMPairModel private[ml](override val uid: String,
                                              private[spark] val bcItemFeatures: Broadcast[Array[SparseVector]],
                                              private[spark] val linear: BigFMPairVector,
                                              private[spark] val factors: BigFMPairMatrix,
                                              @transient private[spark] val client: Client)
-  extends Model[ServerSideGlintFMPairModel] with ServerSideGlintFMPairParams with MLWritable {
+  extends Model[GlintFMPairModel] with GlintFMPairParams with MLWritable {
 
   /** @group setParam */
   def setFilterItemsCol(value: String): this.type = set(filterItemsCol, value)
@@ -940,12 +940,12 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
   }
 
   // TODO
-  override def copy(extra: ParamMap): ServerSideGlintFMPairModel = {
-    val copied = new ServerSideGlintFMPairModel(uid, bcItemFeatures, linear, factors, client)
+  override def copy(extra: ParamMap): GlintFMPairModel = {
+    val copied = new GlintFMPairModel(uid, bcItemFeatures, linear, factors, client)
     copyValues(copied, extra).setParent(parent)
   }
 
-  override def write: MLWriter = new ServerSideGlintFMPairModel.ServerSideGlintFMPairModelWriter(this)
+  override def write: MLWriter = new GlintFMPairModel.GlintFMPairModelWriter(this)
 
   /**
    * Converts a data set to a data frame required for this model. Filtering is considered.
@@ -1125,9 +1125,9 @@ class ServerSideGlintFMPairModel private[ml](override val uid: String,
 }
 
 
-object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel] {
+object GlintFMPairModel extends MLReadable[GlintFMPairModel] {
 
-  private[ServerSideGlintFMPairModel] class ServerSideGlintFMPairModelWriter(instance: ServerSideGlintFMPairModel)
+  private[GlintFMPairModel] class GlintFMPairModelWriter(instance: GlintFMPairModel)
     extends MLWriter {
 
     @transient
@@ -1142,11 +1142,11 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
     }
   }
 
-  private class ServerSideGlintFMPairModelReader extends MLReader[ServerSideGlintFMPairModel] {
+  private class GlintFMPairModelReader extends MLReader[GlintFMPairModel] {
 
-    private val className = classOf[ServerSideGlintFMPairModel].getName
+    private val className = classOf[GlintFMPairModel].getName
 
-    override def load(path: String): ServerSideGlintFMPairModel = {
+    override def load(path: String): GlintFMPairModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val parameterServerHost = metadata.getParamValue("parameterServerHost").values.asInstanceOf[String]
       val parameterServerConfig = ConfigFactory.parseMap(toJavaPathMap(
@@ -1154,14 +1154,14 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
       load(metadata, path, parameterServerHost, parameterServerConfig)
     }
 
-    def load(path: String, parameterServerHost: String): ServerSideGlintFMPairModel = {
+    def load(path: String, parameterServerHost: String): GlintFMPairModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val parameterServerConfig = ConfigFactory.parseMap(toJavaPathMap(
         metadata.getParamValue("parameterServerConfig").values.asInstanceOf[Map[String, _]]))
       load(metadata, path, parameterServerHost, parameterServerConfig)
     }
 
-    def load(path: String, parameterServerHost: String, parameterServerConfig: Config): ServerSideGlintFMPairModel = {
+    def load(path: String, parameterServerHost: String, parameterServerConfig: Config): GlintFMPairModel = {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       load(metadata, path, parameterServerHost, parameterServerConfig)
     }
@@ -1169,7 +1169,7 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
     def load(metadata: DefaultParamsReader.Metadata,
              path: String,
              parameterServerHost: String,
-             parameterServerConfig: Config): ServerSideGlintFMPairModel = {
+             parameterServerConfig: Config): GlintFMPairModel = {
 
       val config = Client.getHostConfig(parameterServerHost).withFallback(parameterServerConfig)
       val client = if (parameterServerHost.isEmpty) {
@@ -1185,7 +1185,7 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
       val itemFeatures = sc.objectFile[SparseVector](path + "/itemfeatures", minPartitions = 1).collect()
       val bcItemFeatures = sc.broadcast(itemFeatures)
 
-      val model = new ServerSideGlintFMPairModel(metadata.uid, bcItemFeatures, linear, factors, client)
+      val model = new GlintFMPairModel(metadata.uid, bcItemFeatures, linear, factors, client)
       metadata.getAndSetParams(model)
       model.set(model.parameterServerHost, parameterServerHost)
       model.set(model.parameterServerConfig, parameterServerConfig.resolve())
@@ -1207,41 +1207,41 @@ object ServerSideGlintFMPairModel extends MLReadable[ServerSideGlintFMPairModel]
     }
   }
 
-  override def read: MLReader[ServerSideGlintFMPairModel] = new ServerSideGlintFMPairModelReader
+  override def read: MLReader[GlintFMPairModel] = new GlintFMPairModelReader
 
   /**
-   * Loads a [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]]
+   * Loads a [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]]
    * and either starts a parameter server cluster in this Spark application or connects to running parameter servers
    * depending on the saved parameter server host and parameter server configuration.
    *
    * @param path The path
-   * @return The [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]]
+   * @return The [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]]
    */
-  override def load(path: String): ServerSideGlintFMPairModel = super.load(path)
+  override def load(path: String): GlintFMPairModel = super.load(path)
 
   /**
-   * Loads a [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]] and uses
+   * Loads a [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]] and uses
    * the saved parameter server configuration.
    *
    * @param path The path
    * @param parameterServerHost The master host of the running parameter servers. If this is not set a standalone
    *                            parameter server cluster is started in this Spark application.
-   * @return The [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]]
+   * @return The [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]]
    */
-  def load(path: String, parameterServerHost: String): ServerSideGlintFMPairModel = {
-    new ServerSideGlintFMPairModelReader().load(path, parameterServerHost)
+  def load(path: String, parameterServerHost: String): GlintFMPairModel = {
+    new GlintFMPairModelReader().load(path, parameterServerHost)
   }
 
   /**
-   * Loads a [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]]
+   * Loads a [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]]
    *
    * @param path The path
    * @param parameterServerHost The master host of the running parameter servers. If this is not set a standalone
    *                            parameter server cluster is started in this Spark application.
    * @param parameterServerConfig The parameter server configuration
-   * @return The [[org.apache.spark.ml.recommendation.ServerSideGlintFMPairModel ServerSideGlintFMPairModel]]
+   * @return The [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]]
    */
-  def load(path: String, parameterServerHost: String, parameterServerConfig: Config): ServerSideGlintFMPairModel = {
-    new ServerSideGlintFMPairModelReader().load(path, parameterServerHost, parameterServerConfig)
+  def load(path: String, parameterServerHost: String, parameterServerConfig: Config): GlintFMPairModel = {
+    new GlintFMPairModelReader().load(path, parameterServerHost, parameterServerConfig)
   }
 }

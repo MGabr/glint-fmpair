@@ -14,7 +14,7 @@ import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 
-object ServerSideGlintFMPairSpec {
+object GlintFMPairSpec {
 
   /**
    * Helper function to load csv data from path as dataframe
@@ -95,7 +95,7 @@ object ServerSideGlintFMPairSpec {
   }
 }
 
-class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
+class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
 
   /**
    * Path to small preprocessed subsets of the AOTM-2011 dataset.
@@ -156,10 +156,10 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
     s.stop()
   }
 
-  "ServerSideGlintFMPair" should "train and save a model" in {
-    val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
+  "GlintFMPair" should "train and save a model" in {
+    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
 
-    val fmpair = new ServerSideGlintFMPair()
+    val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.01f)
       .setLinearReg(0.01f)
@@ -177,9 +177,9 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
   }
 
   it should "train and save a model using accepted artist exp sampling" in {
-    val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
+    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
 
-    val fmpair = new ServerSideGlintFMPair()
+    val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.01f)
       .setLinearReg(0.01f)
@@ -199,9 +199,9 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
   }
 
   it should "train and save a model using crossbatch sampling and a separate Glint cluster" in {
-    val (traindata, _, _, _) = ServerSideGlintFMPairSpec.toFeatures(ServerSideGlintFMPairSpec.load(s, traindataPath))
+    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
 
-    val fmpair = new ServerSideGlintFMPair()
+    val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.1f)
       .setLinearReg(0.01f)
@@ -228,7 +228,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val model = ServerSideGlintFMPairModel.load(modelPath)
+    val model = GlintFMPairModel.load(modelPath)
     try {
 
       model.getBatchSize shouldBe 256
@@ -246,7 +246,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val model = ServerSideGlintFMPairModel.load(modelPath, InetAddress.getLocalHost.getHostAddress, separateGlintConfig)
+    val model = GlintFMPairModel.load(modelPath, InetAddress.getLocalHost.getHostAddress, separateGlintConfig)
     try {
 
       model.getBatchSize shouldBe 256
@@ -268,7 +268,7 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath)
+    val model = GlintFMPairModel.load(separateGlintModelPath)
     try {
 
       model.getBatchSize shouldBe 256
@@ -292,13 +292,13 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, traindataPath))
-    val testdata = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, traindataPath))
+    val testdata = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
     val testquerydata = testdata.drop("itemid", "itemfeatures")
 
-    val model = ServerSideGlintFMPairModel.load(modelPath)
+    val model = GlintFMPairModel.load(modelPath)
     try {
       val dcgs = model.recommendForUserSubset(testquerydata, 50)
         .join(testdata, "userid")
@@ -325,13 +325,13 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, traindataPath))
-    val testdata = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, traindataPath))
+    val testdata = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
     val testquerydata = testdata.drop("itemid", "itemfeatures")
 
-    val model = ServerSideGlintFMPairModel.load(expModelPath)
+    val model = GlintFMPairModel.load(expModelPath)
     try {
       val dcgs = model.recommendForUserSubset(testquerydata, 50)
         .join(testdata, "userid")
@@ -358,13 +358,13 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, traindataPath))
-    val testdata = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, traindataPath))
+    val testdata = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
     val testquerydata = testdata.drop("itemid", "itemfeatures")
 
-    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath)
+    val model = GlintFMPairModel.load(separateGlintModelPath)
     try {
       val dcgs = model.recommendForUserSubset(testquerydata, 50)
         .join(testdata, "userid")
@@ -391,17 +391,17 @@ class ServerSideGlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Mat
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, traindataPath))
-    val testdata = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = ServerSideGlintFMPairSpec.toFeatures(
-      ServerSideGlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, traindataPath))
+    val testdata = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+    val testquerydata = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
       .groupBy("userid")
       .agg(collect_set("itemid").as("filteritemids"))
       .join(testdata, "userid")
 
-    val model = ServerSideGlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
+    val model = GlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
     try {
       val dcgs = model.recommendForUserSubset(testquerydata, 50)
         .join(testdata, "userid")
