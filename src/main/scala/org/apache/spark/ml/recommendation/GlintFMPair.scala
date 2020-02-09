@@ -95,7 +95,7 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    * @group param
    */
   final val samplingCol = new Param[String](this, "samplingCol",
-    "the name of the column to use for sampling aceptance, usually same as itemCol")
+    "the name of the column to use for acceptance sampling , usually same as itemCol")
   setDefault(samplingCol -> "")
 
   /** @group getParam */
@@ -109,7 +109,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val filterItemsCol = new Param[String](this, "userItems", "")
+  final val filterItemsCol = new Param[String](this, "userItems",
+    "the name of the column to use for recommendation filtering")
   setDefault(filterItemsCol -> "")
 
   /** @group getParam */
@@ -155,25 +156,25 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
   setDefault(seed -> 1)
 
   /**
-   * The mini-batch size
-   * Default: 1024
+   * The per-worker mini-batch size
+   * Default: 256
    *
    * @group param
    */
-  final val batchSize = new IntParam(this, "batchSize", "the mini-batch size", ParamValidators.gt(0))
-  setDefault(batchSize -> 1024)
+  final val batchSize = new IntParam(this, "batchSize", "the worker mini-batch size", ParamValidators.gt(0))
+  setDefault(batchSize -> 256)
 
   /** @group getParam */
   def getBatchSize: Int = $(batchSize)
 
   /**
    * The number of latent factor dimensions (k)
-   * Default: 50
+   * Default: 150
    *
    * @group param
    */
   final val numDims = new IntParam(this, "numDims", "the number of dimensions (k)", ParamValidators.gt(0))
-  setDefault(numDims -> 50)
+  setDefault(numDims -> 150)
 
   /** @group getParam */
   def getNumDims: Int = $(numDims)
@@ -204,14 +205,14 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
 
 
   /**
-   * The number of parameter servers to create
-   * Default: 5
+   * The number of parameter servers
+   * Default: 3
    *
    * @group param
    */
   final val numParameterServers = new IntParam(this, "numParameterServers",
-    "the number of parameter servers to create")
-  setDefault(numParameterServers -> 5)
+    "the number of parameter servers")
+  setDefault(numParameterServers -> 3)
 
   /** @group getParam */
   def getNumParameterServers: Int = $(numParameterServers)
@@ -541,7 +542,7 @@ class GlintFMPair(override val uid: String)
         .select(getItemCol, getItemfeaturesCol)
         .groupBy(getItemCol)
         .agg(count(getItemfeaturesCol).as("count"), first(getItemfeaturesCol).as(getItemfeaturesCol))
-        .select(exp(rank().over(Window.orderBy(desc("count")))).as("exp"), col(getItemfeaturesCol))
+        .select(exp(rank().over(Window.orderBy(desc("count")))).as("exp"), col(getItemfeaturesCol))  // TODO...
 
       val expSum = dfItems2Exp.select("exp").groupBy().sum().first.get(0)
 
