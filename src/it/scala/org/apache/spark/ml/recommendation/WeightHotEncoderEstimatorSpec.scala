@@ -3,9 +3,10 @@ package org.apache.spark.ml.recommendation
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.ml.feature.{WeightHotEncoderEstimator, WeightHotEncoderModel}
-import org.apache.spark.ml.linalg.SparseVector
+import org.apache.spark.ml.linalg.{SparseVector, Vectors}
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
+import org.apache.spark.sql.functions._
+import org.scalatest.{BeforeAndAfterAll, FlatSpec, Ignore, Inspectors, Matchers}
 
 object WeightHotEncoderEstimatorSpec {
 
@@ -31,10 +32,12 @@ class WeightHotEncoderEstimatorSpec extends FlatSpec with BeforeAndAfterAll with
   private val testdataPath = "AOTM-2011-small-test.csv"
 
   /**
-   * Path to save model to. The first test will create it and subsequent tests will rely on it being present
+   * Paths to save models to. The first test will create it and subsequent tests will rely on it being present
    */
   private val modelPath = "/var/tmp/AOTM-2011-small.model"
+  private val groupModelPath = "/var/tmp/group/AOTM-2011-small.model"
   private var modelCreated = false
+  private var groupModelCreated = false
 
   /**
    * The Spark session to use
@@ -71,6 +74,21 @@ class WeightHotEncoderEstimatorSpec extends FlatSpec with BeforeAndAfterAll with
     modelCreated = true
   }
 
+  it should "train and save a model for grouping" in {
+    val traindata = WeightHotEncoderEstimatorSpec.load(s, traindataPath)
+
+    val model = new WeightHotEncoderEstimator()
+      .setWeights(Array(1.0, 0.3))
+      .setGroupCols(Array("pid"))
+      .setInputCols(Array("traid", "albid"))
+      .setOutputCols(Array("traid_encoded", "albid_encoded"))
+      .fit(traindata)
+
+    model.save(groupModelPath)
+    FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(groupModelPath)) shouldBe true
+    groupModelCreated = true
+  }
+
   it should "load a model" in {
     if (!modelCreated) {
       pending
@@ -94,5 +112,26 @@ class WeightHotEncoderEstimatorSpec extends FlatSpec with BeforeAndAfterAll with
     val weights = Array("pid_encoded", "userid_encoded", "traid_encoded", "albid_encoded", "artid_encoded")
       .foldLeft(Array[Double]())((values, outputCol) => values ++ transformedRow.getAs[SparseVector](outputCol).values)
     weights shouldEqual Array(1.0, 0.3, 1.0, 0.5, 0.1)
+  }
+
+  it should "hot encode groups with sqrt weighting per default" in {
+    if (!groupModelCreated) {
+      pending
+    }
+
+    val testdata = WeightHotEncoderEstimatorSpec.load(s, traindataPath)
+
+    val model = WeightHotEncoderModel.load(groupModelPath).setGroupCols(Array("pid"))
+
+    val transformedRow = model.transform(testdata).filter(col("pid").equalTo(0)).head()
+
+    val trackVector = transformedRow.getAs[SparseVector]("traid_encoded")
+    val albumVector = transformedRow.getAs[SparseVector]("albid_encoded")
+
+    val ids = Array(0, 1, 2, 3, 4, 5)
+    val trackWeights = ids.map(_ => 1.0 / math.sqrt(ids.length))
+    val albumWeights = ids.map(_ => 0.3 / math.sqrt(ids.length))
+    trackVector should equal(Vectors.sparse(5072, ids, trackWeights))
+    albumVector should equal(Vectors.sparse(3452, ids, albumWeights))
   }
 }

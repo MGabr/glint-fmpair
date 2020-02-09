@@ -18,7 +18,6 @@
 package org.apache.spark.ml.feature
 
 import org.apache.hadoop.fs.Path
-
 import org.apache.spark.SparkException
 import org.apache.spark.annotation.Since
 import org.apache.spark.ml.{Estimator, Model}
@@ -28,8 +27,8 @@ import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared.{HasHandleInvalid, HasInputCols, HasOutputCols}
 import org.apache.spark.ml.util._
 import org.apache.spark.sql.{DataFrame, Dataset}
-import org.apache.spark.sql.expressions.UserDefinedFunction
-import org.apache.spark.sql.functions.{col, lit, udf}
+import org.apache.spark.sql.expressions.{UserDefinedFunction, Window}
+import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
 
 /** Private trait for params and common methods for WeightHotEncoderEstimator and WeightHotEncoderModel */
@@ -78,6 +77,36 @@ private[ml] trait WeightHotEncoderBase extends Params with HasHandleInvalid
   /** @group getParam */
   def getWeights: Array[Double] = $(weights)
 
+  /**
+   * The columns to group by if a group encoding should be used.
+   *
+   * @group param
+   */
+  final val groupCols: StringArrayParam = new StringArrayParam(this, "groupCols",
+    "the columns to use for grouping")
+  setDefault(groupCols -> Array())
+
+  /** @group getParam */
+  def getGroupCols: Array[String] = $(groupCols)
+
+  /**
+   * The group weighting to use.
+   *
+   * "equi" means dividint by the group size
+   * "sqrt" means dividing by the square root of the group size
+   * "one" means no division
+   *
+   * Default: "sqrt"
+   * @group param
+   */
+  final val groupWeighting: Param[String] = new Param[String](this, "groupWeighting",
+    "the group weighting to use, one of equi, sqrt and one")
+  setDefault(groupWeighting -> "sqrt")
+
+  /** @group getParam */
+  def getGroupWeighting: String = $(groupWeighting)
+
+
   protected def validateAndTransformSchema(
                                             schema: StructType,
                                             dropLast: Boolean,
@@ -118,6 +147,10 @@ private[ml] trait WeightHotEncoderBase extends Params with HasHandleInvalid
  * added as last category. So when `dropLast` is true, invalid values are encoded as all-zeros
  * vector.
  *
+ * A group encoding is also possible. In this case there can be multiple weight values, with
+ * one weight value per row of the group. All rows of a group have the same vector.
+ * The weight values of a group can further be weighted by the group size.
+ *
  * @note When encoding multi-column by using `inputCols` and `outputCols` params, input/output cols
  * come in pairs, specified by the order in the arrays, and each pair is treated independently.
  *
@@ -148,6 +181,13 @@ class WeightHotEncoderEstimator @Since("2.3.0") (@Since("2.3.0") override val ui
 
   /** @group setParam */
   def setWeights(value: Array[Double]): this.type = set(weights, value)
+
+  /** @group setParam */
+  def setGroupCols(value: Array[String]): this.type = set(groupCols, value)
+
+  /** @group setParam */
+  def setGroupWeighting(value: String): this.type = set(groupWeighting, value)
+
 
   @Since("2.3.0")
   override def transformSchema(schema: StructType): StructType = {
@@ -281,6 +321,47 @@ class WeightHotEncoderModel private[ml] (
     }
   }
 
+  private def groupEncoder: UserDefinedFunction = {
+    val keepInvalid = getHandleInvalid == WeightHotEncoderEstimator.KEEP_INVALID
+    val configedSizes = getConfigedCategorySizes
+    val localCategorySizes = categorySizes
+
+    val weights = getWeights
+    val groupWeighting = getGroupWeighting
+
+    // The udf performed on input data. The first parameter is the input value. The second
+    // parameter is the index in inputCols of the column being encoded.
+    udf { (labels: Seq[Double], colIdx: Int) =>
+      val origCategorySize = localCategorySizes(colIdx)
+      // idx: index in vector of the single 1-valued element
+      val idxs = labels.map(label => if (label >= 0 && label < origCategorySize) {
+        label
+      } else {
+        if (keepInvalid) {
+          origCategorySize
+        } else {
+          if (label < 0) {
+            throw new SparkException(s"Negative value: $label. Input can't be negative. " +
+              s"To handle invalid values, set Param handleInvalid to " +
+              s"${WeightHotEncoderEstimator.KEEP_INVALID}")
+          } else {
+            throw new SparkException(s"Unseen value: $label. To handle unseen values, " +
+              s"set Param handleInvalid to ${WeightHotEncoderEstimator.KEEP_INVALID}.")
+          }
+        }
+      })
+
+      val size = configedSizes(colIdx)
+      val filteredIdxs = idxs.filter(idx => idx < size).map(_.toInt).toArray
+      val weight = groupWeighting match {
+        case "equi" => weights(colIdx) / filteredIdxs.length
+        case "sqrt" => weights(colIdx) / math.sqrt(filteredIdxs.length)
+        case "one" => weights(colIdx)
+      }
+      Vectors.sparse(size, filteredIdxs, filteredIdxs.map(_ => weight))
+    }
+  }
+
   /** @group setParam */
   @Since("2.3.0")
   def setInputCols(values: Array[String]): this.type = set(inputCols, values)
@@ -299,6 +380,12 @@ class WeightHotEncoderModel private[ml] (
 
   /** @group setParam */
   def setWeights(value: Array[Double]): this.type = set(weights, value)
+
+  /** @group setParam */
+  def setGroupCols(value: Array[String]): this.type = set(groupCols, value)
+
+  /** @group setParam */
+  def setGroupWeighting(value: String): this.type = set(groupWeighting, value)
 
   @Since("2.3.0")
   override def transformSchema(schema: StructType): StructType = {
@@ -343,6 +430,9 @@ class WeightHotEncoderModel private[ml] (
     val transformedSchema = transformSchema(dataset.schema, logging = true)
     val keepInvalid = $(handleInvalid) == WeightHotEncoderEstimator.KEEP_INVALID
 
+    val groupCols = getGroupCols
+    val groupWindow = Window.partitionBy(groupCols.map(col) :_*)
+
     val encodedColumns = $(inputCols).indices.map { idx =>
       val inputColName = $(inputCols)(idx)
       val outputColName = $(outputCols)(idx)
@@ -357,8 +447,13 @@ class WeightHotEncoderModel private[ml] (
         outputAttrGroupFromSchema.toMetadata()
       }
 
-      encoder(col(inputColName).cast(DoubleType), lit(idx))
-        .as(outputColName, metadata)
+      if (groupCols.nonEmpty) {
+        groupEncoder(sort_array(collect_set(col(inputColName).cast(DoubleType)).over(groupWindow)), lit(idx))
+          .as(outputColName, metadata)
+      } else {
+        encoder(col(inputColName).cast(DoubleType), lit(idx))
+          .as(outputColName, metadata)
+      }
     }
     dataset.withColumns($(outputCols), encodedColumns)
   }
