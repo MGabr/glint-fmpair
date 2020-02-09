@@ -49,8 +49,8 @@ test in IntegrationTest := {
   val execSparkParameterServer =
     s"""./spark-test-env.sh exec-detach
         spark-submit
-        --conf spark.driver.extraJavaOptions=$aeronBufferLength
-        --conf spark.executor.extraJavaOptions=$aeronBufferLength
+        --conf spark.driver.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
+        --conf spark.executor.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
         --total-executor-cores 2
         --class $sparkParameterServerMain
         target/scala-$scalaMajorMinorVersion/${name.value}-assembly-${version.value}.jar
@@ -59,8 +59,8 @@ test in IntegrationTest := {
   val execSparkTests =
     s"""./spark-test-env.sh exec
         spark-submit
-        --conf spark.driver.extraJavaOptions=$aeronBufferLength
-        --conf spark.executor.extraJavaOptions=$aeronBufferLength
+        --conf spark.driver.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
+        --conf spark.executor.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
         --total-executor-cores 2
         --jars target/scala-$scalaMajorMinorVersion/${name.value}-assembly-${version.value}.jar
         --class $sparkTestsMain
