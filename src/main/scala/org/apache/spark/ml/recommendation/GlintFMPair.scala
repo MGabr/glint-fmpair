@@ -109,7 +109,7 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val filterItemsCol = new Param[String](this, "userItems",
+  final val filterItemsCol = new Param[String](this, "filterItemsCol",
     "the name of the column to use for recommendation filtering")
   setDefault(filterItemsCol -> "")
 
@@ -161,7 +161,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val batchSize = new IntParam(this, "batchSize", "the worker mini-batch size", ParamValidators.gt(0))
+  final val batchSize = new IntParam(this, "batchSize",
+    "the worker mini-batch size", ParamValidators.gt(0))
   setDefault(batchSize -> 256)
 
   /** @group getParam */
@@ -173,7 +174,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val numDims = new IntParam(this, "numDims", "the number of dimensions (k)", ParamValidators.gt(0))
+  final val numDims = new IntParam(this, "numDims",
+    "the number of dimensions (k)", ParamValidators.gt(0))
   setDefault(numDims -> 150)
 
   /** @group getParam */
@@ -185,7 +187,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val linearReg = new FloatParam(this, "linearReg", "the regularization rate for the linear weights", ParamValidators.gtEq(0))
+  final val linearReg = new FloatParam(this, "linearReg",
+    "the regularization rate for the linear weights", ParamValidators.gtEq(0))
   setDefault(linearReg -> 0.01f)
 
   /** @group getParam */
@@ -197,7 +200,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    *
    * @group param
    */
-  final val factorsReg = new FloatParam(this, "factorsReg", "the regularization rate for the factor weights", ParamValidators.gtEq(0))
+  final val factorsReg = new FloatParam(this, "factorsReg",
+    "the regularization rate for the factor weights", ParamValidators.gtEq(0))
   setDefault(factorsReg -> 0.001f)
 
   /** @group getParam */
@@ -281,6 +285,9 @@ class GlintFMPair(override val uid: String)
 
   /** @group setParam */
   def setSamplingCol(value: String): this.type = set(samplingCol, value)
+
+  /** @group setParam */
+  def setFilterItemsCol(value: String): this.type = set(filterItemsCol, value)
 
 
   /** @group setParam */
@@ -918,10 +925,10 @@ object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
 }
 
 class GlintFMPairModel private[ml](override val uid: String,
-                                             private[spark] val bcItemFeatures: Broadcast[Array[SparseVector]],
-                                             private[spark] val linear: BigFMPairVector,
-                                             private[spark] val factors: BigFMPairMatrix,
-                                             @transient private[spark] val client: Client)
+                                   private[spark] val bcItemFeatures: Broadcast[Array[SparseVector]],
+                                   private[spark] val linear: BigFMPairVector,
+                                   private[spark] val factors: BigFMPairMatrix,
+                                   @transient private[spark] val client: Client)
   extends Model[GlintFMPairModel] with GlintFMPairParams with MLWritable {
 
   /** @group setParam */
@@ -1111,13 +1118,13 @@ class GlintFMPairModel private[ml](override val uid: String,
   }
 
   /**
-   * Stops the model and releases the underlying distributed models and broadcasts.
+   * Destroys the model and releases the underlying distributed models and broadcasts.
    * This model can't be used anymore afterwards.
    *
    * @param terminateOtherClients If other clients should be terminated. This is necessary if a glint cluster in
    *                              another Spark application should be terminated.
    */
-  def stop(terminateOtherClients: Boolean = false): Unit = {
+  def destroy(terminateOtherClients: Boolean = false): Unit = {
     linear.destroy()
     factors.destroy()
     client.terminateOnSpark(SparkSession.builder().getOrCreate().sparkContext, terminateOtherClients)

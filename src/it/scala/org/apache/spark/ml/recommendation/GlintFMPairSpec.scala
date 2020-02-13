@@ -93,6 +93,22 @@ object GlintFMPairSpec {
 
     featuresData.drop(userInputCols ++ itemInputCols :_*)
   }
+
+  /**
+   * Computes the mean hit rate and mean normalized discounted cumulative gain for the recommendations data frame
+   */
+  def toHitRateAndNDCG(data: DataFrame): (Double, Double) = {
+    val dcgs = data.rdd
+      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
+      .map { case (item, recs) =>
+        recs.zipWithIndex.map { case (rec, i) =>
+          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+        }.sum
+      }.collect()
+    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+    val ndcg = dcgs.sum / dcgs.length
+    (hitRate, ndcg)
+  }
 }
 
 class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
@@ -108,6 +124,15 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
   private val traindataPath = "AOTM-2011-small-train.csv"
   private val testquerydataPath = "AOTM-2011-small-test-queryseeds.csv"
   private val testdataPath = "AOTM-2011-small-test.csv"
+
+  /**
+   * Data frames containing the features of the AOTM-2011 dataset subsets at the corresponding paths.
+   * They are created once at the beginning of the tests and can be used in the tests
+   */
+  var trainData: DataFrame = _
+  var testData: DataFrame = _
+  var testqueryData: DataFrame = _
+  var filteritemsTestqueryData: DataFrame = _
 
   /**
    * Path to save model to. The first test will create it and subsequent tests will rely on it being present
@@ -137,6 +162,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
 
   implicit val ec = ExecutionContext.Implicits.global
 
+
   override def beforeAll(): Unit = {
     super.beforeAll()
 
@@ -145,6 +171,22 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
     fs.copyFromLocalFile(new Path(traindataPath), new Path(traindataPath))
     fs.copyFromLocalFile(new Path(testdataPath), new Path(testdataPath))
     fs.copyFromLocalFile(new Path(testquerydataPath), new Path(testquerydataPath))
+
+    val (trainData, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, traindataPath))
+    this.trainData = trainData
+
+    this.testData = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
+
+    this.testqueryData = this.testData.drop("itemid", "itemfeatures")
+
+    this.filteritemsTestqueryData = GlintFMPairSpec.toFeatures(
+      GlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
+      .groupBy("userid")
+      .agg(collect_set("itemid").as("filteritemids"))
+      .join(testData, "userid")
+      .drop("itemid", "itemfeatures")
   }
 
   override def afterAll(): Unit = {
@@ -157,8 +199,6 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
   }
 
   "GlintFMPair" should "train and save a model" in {
-    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
-
     val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.01f)
@@ -166,19 +206,17 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
 
-    val model = fmpair.fit(traindata)
+    val model = fmpair.fit(trainData)
     try {
       model.save(modelPath)
       FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(modelPath)) shouldBe true
       modelCreated = true
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
   it should "train and save a model using accepted artist exp sampling" in {
-    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
-
     val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.01f)
@@ -188,19 +226,17 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       .setSampler("exp")
       .setSamplingCol("artid")
 
-    val model = fmpair.fit(traindata)
+    val model = fmpair.fit(trainData)
     try {
       model.save(expModelPath)
       FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(expModelPath)) shouldBe true
       expModelCreated = true
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
   it should "train and save a model using crossbatch sampling and a separate Glint cluster" in {
-    val (traindata, _, _, _) = GlintFMPairSpec.toFeatures(GlintFMPairSpec.load(s, traindataPath))
-
     val fmpair = new GlintFMPair()
       .setBatchSize(256)
       .setStepSize(0.1f)
@@ -213,13 +249,13 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       .setSamplingCol("itemid")
       .setMaxIter(100)
 
-    val model = fmpair.fit(traindata)
+    val model = fmpair.fit(trainData)
     try {
       model.save(separateGlintModelPath)
       FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(separateGlintModelPath)) shouldBe true
       separateGlintModelCreated = true
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -237,7 +273,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getMaxIter shouldBe 1000
       model.getNumParameterServers shouldBe 2
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -259,7 +295,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getParameterServerHost shouldEqual InetAddress.getLocalHost.getHostAddress
       model.getParameterServerConfig should not be empty
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -283,7 +319,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getParameterServerHost shouldEqual InetAddress.getLocalHost.getHostAddress
       model.getParameterServerConfig should not be empty
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -292,31 +328,15 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, traindataPath))
-    val testdata = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid", "itemfeatures")
-
     val model = GlintFMPairModel.load(modelPath)
     try {
-      val dcgs = model.recommendForUserSubset(testquerydata, 50)
-        .join(testdata, "userid")
-        .rdd
-        .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-        .map { case (item, recs) =>
-          recs.zipWithIndex.map { case (rec, i) =>
-            if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-          }.sum
-        }.collect()
-
-      val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-      val ndcg = dcgs.sum / dcgs.length
+      val (hitRate, ndcg) = GlintFMPairSpec.toHitRateAndNDCG(
+        model.recommendForUserSubset(testqueryData, 50).join(testData, "userid"))
 
       hitRate should be > 0.35
       ndcg should be > 0.12
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -325,31 +345,15 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, traindataPath))
-    val testdata = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid", "itemfeatures")
-
     val model = GlintFMPairModel.load(expModelPath)
     try {
-      val dcgs = model.recommendForUserSubset(testquerydata, 50)
-        .join(testdata, "userid")
-        .rdd
-        .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-        .map { case (item, recs) =>
-          recs.zipWithIndex.map { case (rec, i) =>
-            if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-          }.sum
-        }.collect()
-
-      val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-      val ndcg = dcgs.sum / dcgs.length
+      val (hitRate, ndcg) = GlintFMPairSpec.toHitRateAndNDCG(
+        model.recommendForUserSubset(testqueryData, 50).join(testData, "userid"))
 
       hitRate should be > 0.31
       ndcg should be > 0.09
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -358,31 +362,15 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, traindataPath))
-    val testdata = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = testdata.drop("itemid", "itemfeatures")
-
     val model = GlintFMPairModel.load(separateGlintModelPath)
     try {
-      val dcgs = model.recommendForUserSubset(testquerydata, 50)
-        .join(testdata, "userid")
-        .rdd
-        .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-        .map { case (item, recs) =>
-          recs.zipWithIndex.map { case (rec, i) =>
-            if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-          }.sum
-        }.collect()
-
-      val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-      val ndcg = dcgs.sum / dcgs.length
+      val (hitRate, ndcg) = GlintFMPairSpec.toHitRateAndNDCG(
+        model.recommendForUserSubset(testqueryData, 50).join(testData, "userid"))
 
       hitRate should be > 0.35
       ndcg should be > 0.12
     } finally {
-      model.stop()
+      model.destroy()
     }
   }
 
@@ -391,35 +379,15 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       pending
     }
 
-    val (_, userEncoder, itemEncoder, itemctxEncoder) = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, traindataPath))
-    val testdata = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, testdataPath), userEncoder, itemEncoder, itemctxEncoder)
-    val testquerydata = GlintFMPairSpec.toFeatures(
-      GlintFMPairSpec.load(s, testquerydataPath), userEncoder, itemEncoder, itemctxEncoder)
-      .groupBy("userid")
-      .agg(collect_set("itemid").as("filteritemids"))
-      .join(testdata, "userid")
-
     val model = GlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
     try {
-      val dcgs = model.recommendForUserSubset(testquerydata, 50)
-        .join(testdata, "userid")
-        .rdd
-        .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-        .map { case (item, recs) =>
-          recs.zipWithIndex.map { case (rec, i) =>
-            if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-          }.sum
-        }.collect()
-
-      val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-      val ndcg = dcgs.sum / dcgs.length
+      val (hitRate, ndcg) = GlintFMPairSpec.toHitRateAndNDCG(
+        model.recommendForUserSubset(filteritemsTestqueryData, 50))
 
       hitRate should be > 0.35
       ndcg should be > 0.20
     } finally {
-      model.stop(terminateOtherClients=true)
+      model.destroy(terminateOtherClients=true)
     }
   }
 }
