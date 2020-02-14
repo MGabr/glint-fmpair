@@ -17,10 +17,11 @@ import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, MetaData, Sa
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
-import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.expressions.{Aggregator, Window}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
-import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Encoders, Row, SparkSession}
+import org.apache.spark.util.collection.PrimitiveKeyOpenHashMap
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
 import spire.implicits.cforRange
 
@@ -642,18 +643,23 @@ class GlintFMPair(override val uid: String)
                                   numItemFeatures: Int,
                                   numFeatures: Int): (DataFrame, Array[Float], Array[Float], Int) = {
 
+    implicit val encoder = Encoders.kryo[Array[Float]]
+
+    val featureProbs = df
+      .select(getItemfeaturesCol, getUserctxfeaturesCol)
+      .groupBy()
+      .agg(new FeatureProbabilityAggregator(2, numFeatures, df.count()).toColumn)
+      .as[Array[Float]]
+      .collect()(0)
+
     val dfItem2features = df
       .select(getItemCol, getItemfeaturesCol)
       .groupBy(getItemCol)
       .agg(first(getItemfeaturesCol).as(getItemfeaturesCol))
+    val negFeatureProbs = computeNegFeatureProbs(df, dfItem2features, numFeatures)
 
-    val dfCount = df.count()
-    val featureProbs = aggFeatureProbs(df.select(getItemfeaturesCol), numFeatures, dfCount)
-    val negItemFeatureProbs = computeNegItemFeatureProbs(df, dfItem2features, numFeatures)
-    val userctxFeatureProbs = aggFeatureProbs(df.select(getUserctxfeaturesCol), numFeatures, dfCount)
-    for (i <- featureProbs.indices) {
-      featureProbs(i) += negItemFeatureProbs(i)
-      featureProbs(i) += userctxFeatureProbs(i)
+    for (i <- negFeatureProbs.indices) {
+      featureProbs(i) += negFeatureProbs(i)
     }
     val avgActiveFeatures = featureProbs.sum.toInt
 
@@ -663,9 +669,9 @@ class GlintFMPair(override val uid: String)
   /**
    * Computes the negative item feature probabilities for the used sampling method
    */
-  private def computeNegItemFeatureProbs(df: DataFrame,
-                                         dfItem2features: DataFrame,
-                                         numFeatures: Int): Array[Float] = {
+  private def computeNegFeatureProbs(df: DataFrame, dfItem2features: DataFrame, numFeatures: Int): Array[Float] = {
+
+    implicit val encoder = Encoders.kryo[Array[Float]]
 
     val itemCount = dfItem2features.count()
 
@@ -673,66 +679,28 @@ class GlintFMPair(override val uid: String)
       val rho = getRho
       val exp = udf((rank: Int) => -(rank.toDouble + 1) / (itemCount.toDouble * rho.toDouble))
 
-      var dfItems2Exp = df
+      val dfItems2Exp = df
         .select(getItemCol, getItemfeaturesCol)
         .groupBy(getItemCol)
-        .agg(count(getItemfeaturesCol).as("count"), first(getItemfeaturesCol).as(getItemfeaturesCol))
-        .select(exp(rank().over(Window.orderBy(desc("count")))).as("exp"), col(getItemfeaturesCol))  // TODO...
+        .agg(first(getItemfeaturesCol).as(getItemfeaturesCol), count(getItemfeaturesCol).as("count"))
+        .select(col(getItemfeaturesCol), exp(rank().over(Window.orderBy(desc("count")))).as("exp"))
 
       val expSum = dfItems2Exp.select("exp").groupBy().sum().first.get(0)
 
-      dfItems2Exp = dfItems2Exp.select(col("exp").divide(expSum), col(getItemfeaturesCol))
-
-      aggWeightedFeatureProbs(dfItems2Exp, numFeatures, itemCount)
+      dfItems2Exp
+        .select(col("exp").divide(expSum), col(getItemfeaturesCol))
+        .groupBy()
+        .agg(new WeightedFeatureProbabilityAggregator(1, numFeatures, itemCount).toColumn)
+        .as[Array[Float]]
+        .collect()(0)
     } else {
-      aggFeatureProbs(dfItem2features.select(getItemfeaturesCol), numFeatures, itemCount)
+      dfItem2features
+        .select(getItemfeaturesCol)
+        .groupBy()
+        .agg(new FeatureProbabilityAggregator(1, numFeatures, itemCount).toColumn)
+        .as[Array[Float]]
+        .collect()(0)
     }
-  }
-
-  /**
-   * Aggregates a data frame of sparse vectors to compute the probabilities of the active features
-   */
-  private def aggFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
-    featureDf
-      .rdd
-      .map(r => r.getAs[SparseVector](0))
-      .aggregate(new Array[Long](numFeatures))(
-        (counts, v) => {
-          for (i <- v.indices) {
-            counts(i) += 1L
-          }
-          counts
-        }, (counts1, counts2) => {
-          for (i <- counts2.indices) {
-            counts1(i) += counts2(i)
-          }
-          counts1
-        })
-      .map(count => (count.toDouble / dfCount.toDouble).toFloat)
-  }
-
-  /**
-   * Aggregates a data frame of double weightings and sparse vectors
-   * to compute the weighted probabilities of the active features
-   */
-  private def aggWeightedFeatureProbs(featureDf: DataFrame, numFeatures: Int, dfCount: Long): Array[Float] = {
-    featureDf
-      .rdd
-      .map(r => (r.getDouble(0), r.getAs[SparseVector](1)))
-      .aggregate(new Array[Double](numFeatures))(
-        (counts, t) => {
-          val (w, v) = t
-          for (i <- v.indices) {
-            counts(i) += w
-          }
-          counts
-        }, (counts1, counts2) => {
-          for (i <- counts2.indices) {
-            counts1(i) += counts2(i)
-          }
-          counts1
-        })
-      .map(count => (count / dfCount.toDouble).toFloat)
   }
 
   /**
@@ -823,6 +791,88 @@ class GlintFMPair(override val uid: String)
     schema
   }
 }
+
+private class FeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRows: Long)
+  extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Long], Array[Float]] {
+
+  override def zero: PrimitiveKeyOpenHashMap[Int, Long] =
+    new PrimitiveKeyOpenHashMap[Int, Long]()
+
+  def reduce(map: PrimitiveKeyOpenHashMap[Int, Long], row: Row): PrimitiveKeyOpenHashMap[Int, Long] = {
+    for (iCol <- 0 until numCols) {
+      for (i <- row.getAs[SparseVector](iCol).indices) {
+        map.changeValue(i, 1L, _ + 1)
+      }
+    }
+    map
+  }
+
+  def merge(map1: PrimitiveKeyOpenHashMap[Int, Long],
+            map2: PrimitiveKeyOpenHashMap[Int, Long]): PrimitiveKeyOpenHashMap[Int, Long] = {
+    map2.foreach { case (i: Int, count: Long) =>
+      map1.changeValue(i, count, _ + count)
+    }
+    map1
+  }
+
+  def finish(map: PrimitiveKeyOpenHashMap[Int, Long]): Array[Float] = {
+    val array = new Array[Float](numFeatures)
+    map.foreach { case (i: Int, count: Long) =>
+      array(i) = (count.toDouble / numRows.toDouble).toFloat
+    }
+    array
+  }
+
+  override def bufferEncoder: Encoder[PrimitiveKeyOpenHashMap[Int, Long]] = {
+    Encoders.kryo[PrimitiveKeyOpenHashMap[Int, Long]]
+  }
+
+  override def outputEncoder: Encoder[Array[Float]] = {
+    Encoders.kryo[Array[Float]]
+  }
+}
+
+private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRows: Long)
+  extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Double], Array[Float]] {
+
+  override def zero: PrimitiveKeyOpenHashMap[Int, Double] =
+    new PrimitiveKeyOpenHashMap[Int, Double]()
+
+  def reduce(map: PrimitiveKeyOpenHashMap[Int, Double], row: Row): PrimitiveKeyOpenHashMap[Int, Double] = {
+    val weight = row.getDouble(0)
+    for (iCol <- 1 to numCols) {
+      for (i <- row.getAs[SparseVector](iCol).indices) {
+        map.changeValue(i, weight, _ + weight)
+      }
+    }
+    map
+  }
+
+  def merge(map1: PrimitiveKeyOpenHashMap[Int, Double],
+            map2: PrimitiveKeyOpenHashMap[Int, Double]): PrimitiveKeyOpenHashMap[Int, Double] = {
+    map2.foreach { case (i: Int, weightedCount: Double) =>
+      map1.changeValue(i, weightedCount, _ + weightedCount)
+    }
+    map1
+  }
+
+  def finish(map: PrimitiveKeyOpenHashMap[Int, Double]): Array[Float] = {
+    val array = new Array[Float](numFeatures)
+    map.foreach { case (i: Int, weightedCount: Double) =>
+      array(i) = (weightedCount / numRows.toDouble).toFloat
+    }
+    array
+  }
+
+  override def bufferEncoder: Encoder[PrimitiveKeyOpenHashMap[Int, Double]] = {
+    Encoders.kryo[PrimitiveKeyOpenHashMap[Int, Double]]
+  }
+
+  override def outputEncoder: Encoder[Array[Float]] = {
+    Encoders.kryo[Array[Float]]
+  }
+}
+
 
 
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {

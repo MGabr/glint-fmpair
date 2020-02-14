@@ -60,10 +60,10 @@ class _GlintFMPairParams(HasStepSize, HasMaxIter, HasSeed, HasPredictionCol):
                          "This allows skipping the meta data computation stages when fitting on the same data frame " +
                          "with different parameters. Meta data for \"cross-batch\" and \"uniform\" sampling is intercompatible " +
                          "but \"exp\" requires its own meta data",
-                         typeConverter.TypeConverter.toBool)
+                         typeConverter=TypeConverters.toBoolean)
     saveMetadata = Param(Params._dummy(), "saveMetadata",
                          "Whether the meta data of the fitted data frame should be saved to HDFS",
-                         typeConverter.TypeConverter.toBool)
+                         typeConverter=TypeConverters.toBoolean)
     metadataPath = Param(Params._dummy(), "metadataPath",
                          "The HDFS path to load meta data for the fit data frame from or to save the fitted meta data to")
 
