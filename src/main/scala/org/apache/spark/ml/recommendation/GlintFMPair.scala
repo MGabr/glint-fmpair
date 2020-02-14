@@ -337,82 +337,88 @@ class GlintFMPair(override val uid: String)
     val spark = df.sparkSession
     import spark.implicits._
     val sc = spark.sparkContext
-    val numWorkers = Client.getNumExecutors(sc)
-    val numWorkerCores = Client.getExecutorCores(sc)
-
-    @transient
-    val (client, linear, factors) = initParameterServers(sc, itemFeatureProbs, featureProbs, avgActiveFeatures,
-      numWorkers, numWorkerCores)
 
     val bcItem2features = broadcastItem2features(sc, dfItem2features)
     val bcItemsByCount = broadcastItemsByCount(sc, df)
     val bcItem2sampling = broadcastItem2sampling(sc, df)
 
-    df.select(getUserCol, getItemCol, getUserctxfeaturesCol)
-      .repartition(numWorkers * numWorkerCores, col(getUserCol))  // partition data frame by users
-      .map(row => Interaction(row.getInt(0), row.getInt(1), row.getAs[SparseVector](2)))
-      .foreachPartition((iter: Iterator[Interaction]) => {
+    val numWorkers = Client.getNumExecutors(sc)
+    val numWorkerCores = Client.getExecutorCores(sc)
 
-        val interactions = iter.toArray
+    @transient
+    implicit val ec = ExecutionContext.Implicits.global
+    @transient
+    val (client, linear, factors) = initParameterServers(sc, itemFeatureProbs, featureProbs, avgActiveFeatures,
+      numWorkers, numWorkerCores)
 
-        val epochs = getMaxIter
-        val batchSize = getBatchSize
-        val seed = getSeed
-        val sampler = getSampler
+    try {
+      df.select(getUserCol, getItemCol, getUserctxfeaturesCol)
+        .repartition(numWorkers * numWorkerCores, col(getUserCol)) // partition data frame by users
+        .map(row => Interaction(row.getInt(0), row.getInt(1), row.getAs[SparseVector](2)))
+        .foreachPartition((iter: Iterator[Interaction]) => {
 
-        val item2features = bcItem2features.value
-        val item2sampling = bcItem2sampling.value
-        val itemsByCount = bcItemsByCount.value
+          val interactions = iter.toArray
 
-        // create mapping of user ids to their set of sampling ids
-        val userSamplings = item2sampling.map(i2s => {
-          val us = new IntObjectHashMap[BitSet]()  // instead of scala map, essential for performance
-          interactions.groupBy(_.userId).foreach { case (userId, userInteractions) =>
-            us.put(userId, BitSet(userInteractions.map(i => i2s(i.itemId)) :_*))
-          }
-          us
-        })
+          val epochs = getMaxIter
+          val batchSize = getBatchSize
+          val seed = getSeed
+          val sampler = getSampler
 
-        // create sampling function to use
-        val sample = if (item2sampling.isDefined) {
-          sampler match {
-            case "uniform" => GlintFMPair.uniformSampler(userSamplings.get, item2sampling.get)
-            case "exp" => GlintFMPair.expSampler(userSamplings.get, item2sampling.get, itemsByCount.get, getRho)
-            case "crossbatch" => GlintFMPair.crossbatchSampler(userSamplings.get, item2sampling.get)
-          }
-        } else {
-          sampler match {
-            case "uniform" | "crossbatch" => GlintFMPair.uniformAllSampler(item2features.length)
-            case "exp" => GlintFMPair.expAllSampler(itemsByCount.get, getRho)
-          }
-        }
+          val item2features = bcItem2features.value
+          val item2sampling = bcItem2sampling.value
+          val itemsByCount = bcItemsByCount.value
 
-        @transient
-        implicit val ec = ExecutionContext.Implicits.global
-
-        // now the actual fit pipeline
-        val fitFinishedFuture = (0 until epochs).iterator
-          .flatMap { epoch =>
-
-            if (epoch % 10 == 0) {
-              logInfo(s"Epoch $epoch of $epochs")
+          // create mapping of user ids to their set of sampling ids
+          val userSamplings = item2sampling.map(i2s => {
+            val us = new IntObjectHashMap[BitSet]() // instead of scala map, essential for performance
+            interactions.groupBy(_.userId).foreach { case (userId, userInteractions) =>
+              us.put(userId, BitSet(userInteractions.map(i => i2s(i.itemId)): _*))
             }
+            us
+          })
 
-            val random = new Random(seed + TaskContext.getPartitionId() + epoch)
-            GlintFMPair.shuffle(random, interactions)  // sample positive users, contexts and items
-            interactions.grouped(batchSize).map(i => sample(random, i))  // group into batches and sample negative items
+          // create sampling function to use
+          val sample = if (item2sampling.isDefined) {
+            sampler match {
+              case "uniform" => GlintFMPair.uniformSampler(userSamplings.get, item2sampling.get)
+              case "exp" => GlintFMPair.expSampler(userSamplings.get, item2sampling.get, itemsByCount.get, getRho)
+              case "crossbatch" => GlintFMPair.crossbatchSampler(userSamplings.get, item2sampling.get)
+            }
+          } else {
+            sampler match {
+              case "uniform" | "crossbatch" => GlintFMPair.uniformAllSampler(item2features.length)
+              case "exp" => GlintFMPair.expAllSampler(itemsByCount.get, getRho)
+            }
+          }
 
-          }.map {
+          @transient
+          implicit val ec = ExecutionContext.Implicits.global
+
+          // now the actual fit pipeline
+          val fitFinishedFuture = (0 until epochs).iterator
+            .flatMap { epoch =>
+
+              if (epoch % 10 == 0) {
+                logInfo(s"Epoch $epoch of $epochs")
+              }
+
+              val random = new Random(seed + TaskContext.getPartitionId() + epoch)
+              // sample positive users, contexts and items
+              GlintFMPair.shuffle(random, interactions)
+              // group into batches and sample negative items
+              interactions.grouped(batchSize).map(i => sample(random, i))
+
+            }.map {
             // add dummy non-acceptance matrix if necessary
             case (batch: Array[SampledInteraction], na: DenseMatrix[Float]) => (batch, na)
             case batch: Array[SampledInteraction] => (batch, DenseMatrix.zeros[Float](1, 1))
 
           }.map { case (batch, na) =>
             // lookup features of sampled items
-           val fBatch = batch.map { case SampledInteraction(userId, positemId, negitemId, userctxFeatures) =>
-             SampledFeatures(userctxFeatures, item2features(positemId), item2features(negitemId))
-           }
-           (fBatch, na)
+            val fBatch = batch.map { case SampledInteraction(userId, positemId, negitemId, userctxFeatures) =>
+              SampledFeatures(userctxFeatures, item2features(positemId), item2features(negitemId))
+            }
+            (fBatch, na)
 
           }.map { case (batch, na) =>
             // convert features to the arrays required by the parameter servers
@@ -439,7 +445,7 @@ class GlintFMPair(override val uid: String)
 
             // communicate with the parameter servers for SGD step
             sampler match {
-              case "uniform" | "exp" =>  // "normal" BPR loss
+              case "uniform" | "exp" => // "normal" BPR loss
                 val batchFutureLinear = linear.pullSum(iItem, wItem)
                 val batchFutureFactors = factors.dotprod(iUser, wUser, iItem, wItem)
                 val batchFuture = for {
@@ -451,7 +457,7 @@ class GlintFMPair(override val uid: String)
                 }
                 batchFuture.flatMap(identity)
 
-              case "crossbatch" =>  // crossbatch-BPR loss
+              case "crossbatch" => // crossbatch-BPR loss
                 val batchFutureLinear = linear.pullSum(iItem, wItem)
                 val batchFutureFactors = factors.pullSum(iUser ++ iItem, wUser ++ wItem)
                 val batchFuture = for {
@@ -467,15 +473,23 @@ class GlintFMPair(override val uid: String)
             }
           }
 
-        // wait until communication with parameter servers for last batch is finished
-        Await.ready(fitFinishedFuture, 1 minute)
-        ()
-      })
+          // wait until communication with parameter servers for last batch is finished
+          Await.ready(fitFinishedFuture, 1 minute)
+          ()
+        })
 
-    bcItemsByCount.destroy()
-    bcItem2sampling.destroy()
+      copyValues(new GlintFMPairModel(this.uid, bcItem2features, linear, factors, client).setParent(this))
 
-    copyValues(new GlintFMPairModel(this.uid, bcItem2features, linear, factors, client).setParent(this))
+    } catch { case e: Exception =>
+      factors.destroy()
+      linear.destroy()
+      client.terminateOnSpark(sc)
+      bcItem2features.destroy()
+      throw e
+    } finally {
+      bcItem2sampling.destroy()
+      bcItemsByCount.destroy()
+    }
   }
 
   /**
@@ -615,9 +629,8 @@ class GlintFMPair(override val uid: String)
                                    featureProbs: Array[Float],
                                    avgActiveFeatures: Int,
                                    numWorkers: Int,
-                                   numWorkerCores: Int): (Client, BigFMPairVector, BigFMPairMatrix) = {
-
-    implicit val ec = ExecutionContext.Implicits.global
+                                   numWorkerCores: Int)
+                                  (implicit ec: ExecutionContext): (Client, BigFMPairVector, BigFMPairMatrix) = {
 
     val client = if (getParameterServerHost.isEmpty) {
       Client.runOnSpark(sc, getParameterServerConfig, getNumParameterServers, numWorkers)
@@ -625,14 +638,19 @@ class GlintFMPair(override val uid: String)
       Client(Client.getHostConfig(getParameterServerHost).withFallback(getParameterServerConfig))
     }
 
-    val args = FMPairArguments(getNumDims, getBatchSize, getStepSize.toFloat, getLinearReg, getFactorsReg)
+    try {
+      val args = FMPairArguments(getNumDims, getBatchSize, getStepSize.toFloat, getLinearReg, getFactorsReg)
 
-    val linear = client.fmpairVector(args, itemFeatureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
-      avgActiveFeatures)
-    val factors = client.fmpairMatrix(args, featureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
-      avgActiveFeatures, getNumParameterServers)
+      val linear = client.fmpairVector(args, itemFeatureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
+        avgActiveFeatures)
+      val factors = client.fmpairMatrix(args, featureProbs, sc.hadoopConfiguration, numWorkers * numWorkerCores,
+        avgActiveFeatures, getNumParameterServers)
 
-    (client, linear, factors)
+      (client, linear, factors)
+    } catch { case e: Exception =>
+      client.terminateOnSpark(sc)
+      throw e
+    }
   }
 
   /**
@@ -1186,18 +1204,23 @@ object GlintFMPairModel extends MLReadable[GlintFMPairModel] {
         Client(config)
       }
 
-      val numPartitions = Client.getNumExecutors(sc) * Client.getExecutorCores(sc)
-      val linear = client.loadFMPairVector(path + "/linear", sc.hadoopConfiguration, numPartitions)
-      val factors = client.loadFMPairMatrix(path + "/factors", sc.hadoopConfiguration, numPartitions)
+      try {
+        val numPartitions = Client.getNumExecutors(sc) * Client.getExecutorCores(sc)
+        val linear = client.loadFMPairVector(path + "/linear", sc.hadoopConfiguration, numPartitions)
+        val factors = client.loadFMPairMatrix(path + "/factors", sc.hadoopConfiguration, numPartitions)
 
-      val itemFeatures = sc.objectFile[SparseVector](path + "/itemfeatures", minPartitions = 1).collect()
-      val bcItemFeatures = sc.broadcast(itemFeatures)
+        val itemFeatures = sc.objectFile[SparseVector](path + "/itemfeatures", minPartitions = 1).collect()
+        val bcItemFeatures = sc.broadcast(itemFeatures)
 
-      val model = new GlintFMPairModel(metadata.uid, bcItemFeatures, linear, factors, client)
-      metadata.getAndSetParams(model)
-      model.set(model.parameterServerHost, parameterServerHost)
-      model.set(model.parameterServerConfig, parameterServerConfig.resolve())
-      model
+        val model = new GlintFMPairModel(metadata.uid, bcItemFeatures, linear, factors, client)
+        metadata.getAndSetParams(model)
+        model.set(model.parameterServerHost, parameterServerHost)
+        model.set(model.parameterServerConfig, parameterServerConfig.resolve())
+        model
+      } catch { case e: Exception =>
+        client.terminateOnSpark(sc)
+        throw e
+      }
     }
 
     private def toJavaPathMap(map: Map[String, _],

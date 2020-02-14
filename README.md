@@ -1,10 +1,11 @@
 # Glint-FMPair
+[![Build Status](https://travis-ci.com/MGabr/glint-fmpair.svg)](https://travis-ci.com/MGabr/glint-fmpair)
 
 > Network-efficient distributed pairwise factorization machines for large models on Spark
 using customized [Glint](https://github.com/MGabr/glint) parameter servers
 
 This Spark ML estimator is a distributed implementation of pairwise factorization machines,
-specifically the model presented as LightFM. Important features include
+specifically the model presented as [LightFM](https://github.com/lyst/lightfm). Important features include
 
 * **Distributed large models:**
 Training is done as asynchronous mini-batch gradient descent using parameter servers.
@@ -55,7 +56,7 @@ To start parameter servers as separate Spark application run:
 
     spark-submit --num-executors num-servers --executor-cores server-cores --class glint.Main /path/to/compiled/Glint-FMPair.jar spark
 
-The parameter server master will be started on the driver and the drivers IP will be written to the log output.
+The parameter server master will be started on the driver and the master IP will be written to the log output.
 Pass this IP as `parameterServerHost` to connect to these parameter servers from the Glint-FMPair Spark application. 
 
 ## Spark parameters
@@ -63,7 +64,9 @@ Pass this IP as `parameterServerHost` to connect to these parameter servers from
 Use a higher number of executor cores (`--executor-cores`) instead of more executors (`--num-executors`).
 Preferably set `--executor-cores` to the number of available virtual cores per machine.
 
-Each of the n parameter servers will require enough executor memory (`--executor-memory`) to store 1/n of the latent factors matrix.
+Each of the parameter servers will require enough executor memory (`--executor-memory`) to store 
+a partition of the latent factors matrix.
 
-Further, enough memory for storing the mapping array of item indices to item features is required on each executor.
-It is used for sampling negative items and has to be broadcasted and therefore be below the 8GB broadcast size limit of Spark.
+Further, enough memory for storing the mapping array of item indices to item features is required on each executor,
+as well as enough memory for other eventual mapping arrays.
+These arreays are used for sampling negative items and have to be broadcasted and therefore be below the 8GB broadcast size limit of Spark.
