@@ -200,6 +200,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
 
   "GlintFMPair" should "train and save a model" in {
     val fmpair = new GlintFMPair()
+      .setNumDims(50)
       .setBatchSize(256)
       .setStepSize(0.01f)
       .setLinearReg(0.01f)
@@ -218,6 +219,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
 
   it should "train and save a model using accepted artist exp sampling" in {
     val fmpair = new GlintFMPair()
+      .setNumDims(50)
       .setBatchSize(256)
       .setStepSize(0.01f)
       .setLinearReg(0.01f)
@@ -238,6 +240,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
 
   it should "train and save a model using crossbatch sampling and a separate Glint cluster" in {
     val fmpair = new GlintFMPair()
+      .setNumDims(50)
       .setBatchSize(256)
       .setStepSize(0.1f)
       .setLinearReg(0.01f)
@@ -267,6 +270,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
     val model = GlintFMPairModel.load(modelPath)
     try {
 
+      model.getNumDims shouldBe 50
       model.getBatchSize shouldBe 256
       model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f
@@ -285,6 +289,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
     val model = GlintFMPairModel.load(modelPath, InetAddress.getLocalHost.getHostAddress, separateGlintConfig)
     try {
 
+      model.getNumDims shouldBe 50
       model.getBatchSize shouldBe 256
       model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f
@@ -307,6 +312,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
     val model = GlintFMPairModel.load(separateGlintModelPath)
     try {
 
+      model.getNumDims shouldBe 50
       model.getBatchSize shouldBe 256
       model.getLinearReg shouldBe 0.01f
       model.getFactorsReg shouldBe 0.01f

@@ -43,7 +43,9 @@ test in IntegrationTest := {
   val execSparkParameterServer =
     s"""./spark-test-env.sh exec-detach
         spark-submit
+        --conf spark.driver.extraJavaOptions=-XX:+UseG1GC
         --driver-memory 512m
+        --conf spark.executor.extraJavaOptions=-XX:+UseG1GC
         --executor-memory 512m
         --total-executor-cores 2
         --class $sparkParameterServerMain

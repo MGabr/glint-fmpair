@@ -24,10 +24,6 @@ create_test_environment() {
   -v /`pwd`/src/it/resources/log4j.properties:/opt/spark-2.4.4-bin-hadoop2.6/conf/log4j.properties \
   -v /`pwd`:`pwd` \
   -it \
-  --memory 6g \
-  --memory-swap 10g \
-  --oom-kill-disable \
-  --shm-size=1g \
   --workdir="/`pwd`" \
   mgabr/sparklet-hdfs:2.4.4 bash
   sleep 30
