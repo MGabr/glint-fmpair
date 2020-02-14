@@ -382,7 +382,7 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
     val model = GlintFMPairModel.load(separateGlintModelPath).setFilterItemsCol("filteritemids")
     try {
       val (hitRate, ndcg) = GlintFMPairSpec.toHitRateAndNDCG(
-        model.recommendForUserSubset(filteritemsTestqueryData, 50))
+        model.recommendForUserSubset(filteritemsTestqueryData, 50).join(testData, "userid"))
 
       hitRate should be > 0.35
       ndcg should be > 0.20

@@ -20,12 +20,6 @@ lazy val glint = RootProject(uri("https://github.com/MGabr/glint.git#0.2-fmpair"
 libraryDependencies += "org.scalactic" %% "scalactic" % "3.0.8" % "it"
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "it"
 
-// Lower Aeron buffer to prevent space on /dev/shm running out during local or CI tests
-
-val aeronBufferLength = "-Daeron.term.buffer.length=1048576" // 1024 * 1024
-javaOptions in Test += aeronBufferLength
-javaOptions in IntegrationTest += aeronBufferLength
-
 // Add it:assembly task to build separate jar containing only the integration test sources
 
 Project.inConfig(IntegrationTest)(baseAssemblySettings)
@@ -49,8 +43,8 @@ test in IntegrationTest := {
   val execSparkParameterServer =
     s"""./spark-test-env.sh exec-detach
         spark-submit
-        --conf spark.driver.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
-        --conf spark.executor.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
+        --driver-memory 512m
+        --executor-memory 512m
         --total-executor-cores 2
         --class $sparkParameterServerMain
         target/scala-$scalaMajorMinorVersion/${name.value}-assembly-${version.value}.jar
@@ -59,8 +53,8 @@ test in IntegrationTest := {
   val execSparkTests =
     s"""./spark-test-env.sh exec
         spark-submit
-        --conf spark.driver.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
-        --conf spark.executor.extraJavaOptions=$aeronBufferLength,-XX:+UseG1GC,-XX:NewSize=256m,-XX:MaxNewSize=256m
+        --driver-memory 1024m
+        --executor-memory 1024m
         --total-executor-cores 2
         --jars target/scala-$scalaMajorMinorVersion/${name.value}-assembly-${version.value}.jar
         --class $sparkTestsMain

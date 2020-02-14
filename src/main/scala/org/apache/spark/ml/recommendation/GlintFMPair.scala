@@ -956,82 +956,6 @@ class GlintFMPairModel private[ml](override val uid: String,
   override def write: MLWriter = new GlintFMPairModel.GlintFMPairModelWriter(this)
 
   /**
-   * Converts a data set to a data frame required for this model. Filtering is considered.
-   * If the features have separate index ranges, the user / context feature indices are shifted
-   * so that they start after the item feature indices
-   */
-  private def toDf(dataset: Dataset[_]): DataFrame = {
-
-    val numItemFeatures = linear.size.toInt
-    val numFeatures = factors.rows.toInt
-
-    var cols = Array(col(getUserCol))
-    if (numItemFeatures == numFeatures) {
-      cols = cols :+ col(getUserctxfeaturesCol)
-    } else {
-      val shift = udf((userctxFeatures: SparseVector) =>
-        new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
-      cols = cols :+ shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol)
-    }
-    if (getFilterItemsCol.nonEmpty) {
-      cols = cols :+ col(getFilterItemsCol)
-    }
-    dataset.select(cols :_*)
-  }
-
-  /**
-   * Converts a row iterator to arrays of user information. Filtering is considered
-   */
-  private def toArrays(iter: Iterator[Row], numItems: Int):
-  (Array[Int], Array[BitSet], Array[Array[Int]], Array[Array[Float]], Int) = {
-
-    val rows = iter.toArray
-
-    val userIds = rows.map(_.getInt(0))
-    val userctxFeatures = rows.map(row => row.getAs[SparseVector](1))
-    val userIndices = userctxFeatures.map(_.indices)
-    val userWeights = userctxFeatures.map(_.values.map(_.toFloat))
-
-    val userItemIds = if (getFilterItemsCol.nonEmpty) rows.map(r => BitSet(r.getSeq[Int](2) :_*)) else new Array[BitSet](0)
-    val numArgtopItems = if (getFilterItemsCol.nonEmpty) numItems + userItemIds.map(_.count(_ => true)).max else numItems
-
-    (userIds, userItemIds, userIndices, userWeights, numArgtopItems)
-  }
-
-  /**
-   * Converts arrays of user information and score matrices to an iterator of (userCol: Int, recommendations) rows,
-   * where recommendations are stored as an array of (itemCol: Int, score: Float) rows.
-   *
-   * Only numItems recommendations are returned per user and user items are filtered if a filterItemsCol is set
-   */
-  private def toRowIter(userIds: Array[Int],
-                        userItemIds: Array[BitSet],
-                        argMatrix: DenseMatrix[Int],
-                        scoresMatrix: DenseMatrix[Float],
-                        numItems: Int): Iterator[Row] = {
-
-    val userIter = if (getFilterItemsCol.nonEmpty) userIds.iterator.zip(userItemIds.iterator) else userIds.iterator
-    userIter.zip(argMatrix(*,::).iterator.zip(scoresMatrix(*,::).iterator)).map {
-
-      case ((userid: Int, userItemids: BitSet), (itemids, scores)) =>
-        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
-          .filter { case (itemid, _) => !userItemids.contains(itemid) }
-          .toArray
-          .sortBy { case (_, score) => -score }
-          .take(numItems)
-          .map { case (itemid, score) => Row(itemid, score) }
-        Row(userid, recs)
-
-      case (userid: Int, (itemids, scores)) =>
-        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
-          .toArray
-          .sortBy { case (_, score) => -score }
-          .map { case (itemid, score) => Row(itemid, score) }
-        Row(userid, recs)
-    }
-  }
-
-  /**
    * Returns top numItems items recommended for each user id in the input data set
    *
    * @param dataset The dataset containing a column of user ids and user context features. The column names must match
@@ -1115,6 +1039,82 @@ class GlintFMPairModel private[ml](override val uid: String,
       }
     }(rowEncoder).toDF(getUserCol, "recommendations")
     .select(col(getUserCol), col("recommendations").cast(recommendType))
+  }
+
+  /**
+   * Converts a data set to a data frame required for this model. Filtering is considered.
+   * If the features have separate index ranges, the user / context feature indices are shifted
+   * so that they start after the item feature indices
+   */
+  private def toDf(dataset: Dataset[_]): DataFrame = {
+
+    val numItemFeatures = linear.size.toInt
+    val numFeatures = factors.rows.toInt
+
+    var cols = Array(col(getUserCol))
+    if (numItemFeatures == numFeatures) {
+      cols = cols :+ col(getUserctxfeaturesCol)
+    } else {
+      val shift = udf((userctxFeatures: SparseVector) =>
+        new SparseVector(numFeatures, userctxFeatures.indices.map(i => numItemFeatures + i), userctxFeatures.values))
+      cols = cols :+ shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol)
+    }
+    if (getFilterItemsCol.nonEmpty) {
+      cols = cols :+ col(getFilterItemsCol)
+    }
+    dataset.select(cols :_*)
+  }
+
+  /**
+   * Converts a row iterator to arrays of user information. Filtering is considered
+   */
+  private def toArrays(iter: Iterator[Row], numItems: Int):
+  (Array[Int], Array[BitSet], Array[Array[Int]], Array[Array[Float]], Int) = {
+
+    val rows = iter.toArray
+
+    val userIds = rows.map(_.getInt(0))
+    val userctxFeatures = rows.map(row => row.getAs[SparseVector](1))
+    val userIndices = userctxFeatures.map(_.indices)
+    val userWeights = userctxFeatures.map(_.values.map(_.toFloat))
+
+    val userItemIds = if (getFilterItemsCol.nonEmpty) rows.map(r => BitSet(r.getSeq[Int](2) :_*)) else new Array[BitSet](0)
+    val numArgtopItems = if (getFilterItemsCol.nonEmpty) numItems + userItemIds.map(_.count(_ => true)).max else numItems
+
+    (userIds, userItemIds, userIndices, userWeights, numArgtopItems)
+  }
+
+  /**
+   * Converts arrays of user information and score matrices to an iterator of (userCol: Int, recommendations) rows,
+   * where recommendations are stored as an array of (itemCol: Int, score: Float) rows.
+   *
+   * Only numItems recommendations are returned per user and user items are filtered if a filterItemsCol is set
+   */
+  private def toRowIter(userIds: Array[Int],
+                        userItemIds: Array[BitSet],
+                        argMatrix: DenseMatrix[Int],
+                        scoresMatrix: DenseMatrix[Float],
+                        numItems: Int): Iterator[Row] = {
+
+    val userIter = if (getFilterItemsCol.nonEmpty) userIds.iterator.zip(userItemIds.iterator) else userIds.iterator
+    userIter.zip(argMatrix(*,::).iterator.zip(scoresMatrix(*,::).iterator)).map {
+
+      case ((userid: Int, userItemids: BitSet), (itemids, scores)) =>
+        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
+          .filter { case (itemid, _) => !userItemids.contains(itemid) }
+          .toArray
+          .sortBy { case (_, score) => -score }
+          .take(numItems)
+          .map { case (itemid, score) => Row(itemid, score) }
+        Row(userid, recs)
+
+      case (userid: Int, (itemids, scores)) =>
+        val recs = itemids.valuesIterator.zip(scores.valuesIterator)
+          .toArray
+          .sortBy { case (_, score) => -score }
+          .map { case (itemid, score) => Row(itemid, score) }
+        Row(userid, recs)
+    }
   }
 
   /**
