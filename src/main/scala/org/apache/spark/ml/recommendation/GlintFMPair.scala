@@ -1,16 +1,19 @@
 package org.apache.spark.ml.recommendation
 
-import breeze.linalg.{sum => breezeSum, rank => breezeRank, _}
+import java.io.{ObjectInputStream, ObjectOutputStream}
+
+import breeze.linalg.{rank => breezeRank, sum => breezeSum, _}
 import breeze.numerics.sigmoid
 import com.typesafe.config._
 import glint.models.client.{BigFMPairMatrix, BigFMPairVector}
 import glint.{Client, FMPairArguments}
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
 import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
 import org.apache.spark.ml.param._
-import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, SampledFeatures, SampledInteraction}
+import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, MetaData, SampledFeatures, SampledInteraction}
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
@@ -259,6 +262,46 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
 
   /** @group getParam */
   def getParameterServerConfig: Config = $(parameterServerConfig)
+
+  /**
+   * Whether the meta data of the data frame to fit should be loaded from HDFS.
+   * This allows skipping the meta data computation stages when fitting on the same data frame
+   * with different parameters. Meta data for "cross-batch" and "uniform" sampling is intercompatible
+   * but "exp" requires its own meta data
+   *
+   * Default: false
+   */
+  final val loadMetadata = new BooleanParam(this, "loadMetadata",
+    "Whether the meta data of the data frame to fit should be loaded from HDFS. " +
+      "This allows skipping the meta data computation stages when fitting on the same data frame " +
+      "with different parameters. Meta data for \"cross-batch\" and \"uniform\" sampling is intercompatible " +
+      "but \"exp\" requires its own meta data")
+  setDefault(loadMetadata -> false)
+
+  /** @group getParam */
+  def getLoadMetadata: Boolean = $(loadMetadata)
+
+  /**
+   * Whether the meta data of the fitted data frame should be saved to HDFS.
+   * Default: false
+   */
+  final val saveMetadata = new BooleanParam(this, "saveMetadata",
+    "Whether the meta data of the fitted data frame should be saved to HDFS")
+  setDefault(saveMetadata -> false)
+
+  /** @group getParam */
+  def getSaveMetadata: Boolean = $(saveMetadata)
+
+  /**
+   * The HDFS path to load meta data for the fit data frame from or to save the fitted meta data to.
+   * Default: ""
+   */
+  final val metadataPath = new Param[String](this, "metadataPath",
+    "The HDFS path to load meta data for the fit data frame from or to save the fitted meta data to")
+  setDefault(metadataPath -> "")
+
+  /** @group getParam */
+  def getMetadataPath: String = $(metadataPath)
 }
 
 
@@ -324,6 +367,17 @@ class GlintFMPair(override val uid: String)
   /** @group setParam */
   def setParameterServerConfig(value: Config): this.type = set(parameterServerConfig, value.resolve())
 
+
+  /** @group setParam */
+  def setLoadMetadata(value: Boolean): this.type = set(loadMetadata, value)
+
+  /** @group setParam */
+  def setSaveMetadata(value: Boolean): this.type = set(saveMetadata, value)
+
+  /** @group setParam */
+  def setMetadataPath(value: String): this.type = set(metadataPath, value)
+
+
   /**
    * Fits a [[org.apache.spark.ml.recommendation.GlintFMPairModel GlintFMPairModel]] on the data set
    *
@@ -332,15 +386,17 @@ class GlintFMPair(override val uid: String)
    */
   override def fit(dataset: Dataset[_]): GlintFMPairModel = {
 
-    val (df, dfItem2features, itemFeatureProbs, featureProbs, avgActiveFeatures) = computeFeatureProbs(dataset)
-
-    val spark = df.sparkSession
+    val spark = dataset.sparkSession
     import spark.implicits._
     val sc = spark.sparkContext
 
-    val bcItem2features = broadcastItem2features(sc, dfItem2features)
-    val bcItemsByCount = broadcastItemsByCount(sc, df)
-    val bcItem2sampling = broadcastItem2sampling(sc, df)
+    val (df, numItemFeatures, numFeatures) = toDF(dataset)
+
+    val meta = fitMeta(df, numItemFeatures, numFeatures)
+
+    val bcItem2features = sc.broadcast(meta.item2features)
+    val bcItemsByCount = sc.broadcast(meta.itemsByCount)
+    val bcItem2sampling = sc.broadcast(meta.item2sampling)
 
     val numWorkers = Client.getNumExecutors(sc)
     val numWorkerCores = Client.getExecutorCores(sc)
@@ -348,8 +404,8 @@ class GlintFMPair(override val uid: String)
     @transient
     implicit val ec = ExecutionContext.Implicits.global
     @transient
-    val (client, linear, factors) = initParameterServers(sc, itemFeatureProbs, featureProbs, avgActiveFeatures,
-      numWorkers, numWorkerCores)
+    val (client, linear, factors) = initParameterServers(sc, meta.itemFeatureProbs, meta.featureProbs,
+      meta.avgActiveFeatures, numWorkers, numWorkerCores)
 
     try {
       df.select(getUserCol, getItemCol, getUserctxfeaturesCol)
@@ -493,16 +549,10 @@ class GlintFMPair(override val uid: String)
   }
 
   /**
-   * Converts a data set to data frames required for this model and computes the feature probabilities.
-   * If the features have separate index ranges, the user / context feature indices are shifted
-   * so that they start after the item feature indices
-   *
-   * @return The possibly shifted data frame, the unique item id - item features data frame,
-   *         the item feature probabilities, the whole feature probabilities and the average number of active features
+   * Converts a data set a data frames required for this model. If the features have separate index ranges,
+   * the user / context feature indices are shifted so that they start after the item feature indices
    */
-  private def computeFeatureProbs(dataset: Dataset[_]): (DataFrame, DataFrame, Array[Float], Array[Float], Int) = {
-
-    // get number of features from a sampled first row
+  private def toDF(dataset: Dataset[_]): (DataFrame, Int, Int) = {
     val sampleRow = dataset.select(getItemfeaturesCol, getUserctxfeaturesCol).first()
     val numItemFeatures = sampleRow.getAs[SparseVector](0).size
     val numUserctxFeatures = sampleRow.getAs[SparseVector](1).size
@@ -512,7 +562,6 @@ class GlintFMPair(override val uid: String)
       numItemFeatures + numUserctxFeatures
     }
 
-    // convert to possibly shifted data frame
     var cols = Array(col(getUserCol), col(getItemCol), col(getItemfeaturesCol))
     if (numItemFeatures == numFeatures) {
       cols = cols :+ col(getUserctxfeaturesCol)
@@ -526,13 +575,78 @@ class GlintFMPair(override val uid: String)
     }
     val df = dataset.select(cols :_*)
 
-    // compute unique item id - item features data frame
+    (df, numItemFeatures, numFeatures)
+  }
+
+  /**
+   * Computes the meta data of a data frame.
+   * Also supports saving the meta data to HDFS and loading the meta data from HDFS to skip the computations.
+   */
+  private def fitMeta(df: DataFrame, numItemFeatures: Int, numFeatures: Int): MetaData = {
+
+    if ((getLoadMetadata || getSaveMetadata) && getMetadataPath.isEmpty) {
+      throw new IllegalArgumentException("No meta data path set")
+    }
+
+    if (getLoadMetadata) {
+      val fs = FileSystem.get(df.sparkSession.sparkContext.hadoopConfiguration)
+      if (fs.exists(new Path(getMetadataPath))) {
+        val dataStream = new ObjectInputStream(fs.open(new Path(getMetadataPath)))
+        val meta = dataStream.readObject().asInstanceOf[MetaData]
+        dataStream.close()
+
+        if (numItemFeatures != meta.itemFeatureProbs.length) {
+          throw new IllegalArgumentException("Number of item features does not match with loaded meta data: " +
+            "%s and %s".format(numItemFeatures, meta.itemFeatureProbs.length))
+        }
+        if (numFeatures != meta.featureProbs.length) {
+          throw new IllegalArgumentException("Number of features does not match with loaded meta data: " +
+            "%s and %s".format(numFeatures, meta.featureProbs.length))
+        }
+        if (meta.itemsByCount.isEmpty && getSampler.equals("exp")) {
+          throw new IllegalArgumentException("\"exp\" sampler does not work with loaded meta data")
+        }
+        if (meta.itemsByCount.isDefined && !getSampler.equals("exp")) {
+          throw new IllegalArgumentException(
+            "Sampler \"%s\" does not work with meta data fitted with \"exp\" sampler".format(getSampler))
+        }
+
+        return meta
+      }
+    }
+
+    val (dfItem2features, itemFeatureProbs, featureProbs, avgActiveFeatures) = computeFeatureProbs(
+      df, numItemFeatures, numFeatures)
+    val item2features = computeItem2features(dfItem2features)
+    val itemsByCount = computeItemsByCount(df)
+    val item2sampling = computeItem2sampling(df)
+    val meta = MetaData(itemFeatureProbs, featureProbs, avgActiveFeatures, item2features, itemsByCount, item2sampling)
+
+    if (getSaveMetadata) {
+      val fs = FileSystem.get(df.sparkSession.sparkContext.hadoopConfiguration)
+      val dataStream = new ObjectOutputStream(fs.create(new Path(getMetadataPath)))
+      dataStream.writeObject(meta)
+      dataStream.close()
+    }
+
+    meta
+  }
+
+  /**
+   * Computes the feature probabilities of a data frame.
+   *
+   * @return The unique item id - item features data frame, the item feature probabilities,
+   *         the whole feature probabilities and the average number of active features
+   */
+  private def computeFeatureProbs(df: DataFrame,
+                                  numItemFeatures: Int,
+                                  numFeatures: Int): (DataFrame, Array[Float], Array[Float], Int) = {
+
     val dfItem2features = df
       .select(getItemCol, getItemfeaturesCol)
       .groupBy(getItemCol)
       .agg(first(getItemfeaturesCol).as(getItemfeaturesCol))
 
-    // compute feature probabilities
     val dfCount = df.count()
     val featureProbs = aggFeatureProbs(df.select(getItemfeaturesCol), numFeatures, dfCount)
     val negItemFeatureProbs = computeNegItemFeatureProbs(df, dfItem2features, numFeatures)
@@ -543,7 +657,7 @@ class GlintFMPair(override val uid: String)
     }
     val avgActiveFeatures = featureProbs.sum.toInt
 
-    (df, dfItem2features, featureProbs.slice(0, numItemFeatures), featureProbs, avgActiveFeatures)
+    (dfItem2features, featureProbs.slice(0, numItemFeatures), featureProbs, avgActiveFeatures)
   }
 
   /**
@@ -654,55 +768,48 @@ class GlintFMPair(override val uid: String)
   }
 
   /**
-   * Creates and broadcasts a mapping array of item ids to item features
+   * Creates a mapping array of item ids to item features
    */
-  private def broadcastItem2features(sc: SparkContext, dfItem2features: DataFrame): Broadcast[Array[SparseVector]] = {
-    sc.broadcast {
-      dfItem2features
+  private def computeItem2features(dfItem2features: DataFrame): Array[SparseVector] = {
+    dfItem2features
+      .sort(getItemCol)
+      .collect()
+      .map(_.getAs[SparseVector](getItemfeaturesCol))
+  }
+
+  /**
+   * Creates an array of item ids sorted by their counts ... if exp sampling is used
+   */
+  private def computeItemsByCount(df: DataFrame): Option[Array[Int]] = {
+    if (getSampler.equals("exp")) {
+      Some(df
+        .select(getItemCol)
+        .groupBy(getItemCol)
+        .count()
+        .sort(desc("count"))
+        .select(getItemCol)
+        .rdd
+        .map(row => row.getInt(0))
+        .collect())
+    } else {
+      None
+    }
+  }
+
+  /**
+   * Creates a mapping array of item ids to sampling ids ... if accepted sampling / sampling column is used
+   */
+  private def computeItem2sampling(df: DataFrame): Option[Array[Int]] = {
+    if (getSamplingCol.nonEmpty) {
+      Some(df
+        .select(getItemCol, getSamplingCol)
+        .groupBy(getItemCol)
+        .agg(first(getSamplingCol))
         .sort(getItemCol)
         .collect()
-        .map(_.getAs[SparseVector](getItemfeaturesCol))
-    }
-  }
-
-  /**
-   * Creates and broadcasts an array of item ids sorted by their counts ... if exp sampling is used
-   */
-  private def broadcastItemsByCount(sc: SparkContext, df: DataFrame): Broadcast[Option[Array[Int]]] = {
-    sc.broadcast {
-      if (getSampler.equals("exp")) {
-        Some(df
-          .select(getItemCol)
-          .groupBy(getItemCol)
-          .count()
-          .sort(desc("count"))
-          .select(getItemCol)
-          .rdd
-          .map(row => row.getInt(0))
-          .collect())
-      } else {
-        None
-      }
-    }
-  }
-
-  /**
-   * Creates and broadcasts a mapping array of item ids to sampling ids ...
-   * if accepted sampling / sampling column is used
-   */
-  private def broadcastItem2sampling(sc: SparkContext, df: DataFrame): Broadcast[Option[Array[Int]]] = {
-    sc.broadcast {
-      if (getSamplingCol.nonEmpty) {
-        Some(df
-          .select(getItemCol, getSamplingCol)
-          .groupBy(getItemCol)
-          .agg(first(getSamplingCol))
-          .sort(getItemCol)
-          .collect()
-          .map(_.getInt(1)))
-      } else {
-        None
-      }
+        .map(_.getInt(1)))
+    } else {
+      None
     }
   }
 
@@ -719,6 +826,14 @@ class GlintFMPair(override val uid: String)
 
 
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
+
+  /** The required meta data about the training instances */
+  private case class MetaData(itemFeatureProbs: Array[Float],
+                              featureProbs: Array[Float],
+                              avgActiveFeatures: Int,
+                              item2features: Array[SparseVector],
+                              itemsByCount: Option[Array[Int]],
+                              item2sampling: Option[Array[Int]])
 
   /** An interaction from the training instances */
   private case class Interaction(userId: Int, itemId: Int, userctxFeatures: SparseVector)

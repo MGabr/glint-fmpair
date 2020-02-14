@@ -55,6 +55,18 @@ class _GlintFMPairParams(HasStepSize, HasMaxIter, HasSeed, HasPredictionCol):
                                 "the master host of the running parameter servers. "
                                 "If this is not set a standalone parameter server cluster is started in this Spark application.")
 
+    loadMetadata = Param(Params._dummy(), "loadMetadata",
+                         "Whether the meta data of the data frame to fit should be loaded from HDFS. " +
+                         "This allows skipping the meta data computation stages when fitting on the same data frame " +
+                         "with different parameters. Meta data for \"cross-batch\" and \"uniform\" sampling is intercompatible " +
+                         "but \"exp\" requires its own meta data",
+                         typeConverter.TypeConverter.toBool)
+    saveMetadata = Param(Params._dummy(), "saveMetadata",
+                         "Whether the meta data of the fitted data frame should be saved to HDFS",
+                         typeConverter.TypeConverter.toBool)
+    metadataPath = Param(Params._dummy(), "metadataPath",
+                         "The HDFS path to load meta data for the fit data frame from or to save the fitted meta data to")
+
     def getUserCol(self):
         return self.getOrDefault(self.userCol)
 
@@ -94,6 +106,14 @@ class _GlintFMPairParams(HasStepSize, HasMaxIter, HasSeed, HasPredictionCol):
     def getParameterServerHost(self):
         return self.getOrDefault(self.parameterServerHost)
 
+    def getLoadMetadata(self):
+        return self.getOrDefault(self.loadMetadata)
+
+    def getSaveMetadata(self):
+        return self.getOrDefault(self.saveMetadata)
+
+    def getMetadataPath(self):
+        return self.getOrDefault(self.metadataPath)
 
 
 @inherit_doc
@@ -104,14 +124,16 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
                  itemfeaturesCol="itemfeatures", samplingCol="", filterItemsCol="",
                  maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                  batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
-                 numParameterServers=3, parameterServerHost=""):
+                 numParameterServers=3, parameterServerHost="",
+                 loadMetadata=False, saveMetadata=False, metadataPath=""):
         super(GlintFMPair, self).__init__()
         self._java_obj = self._new_java_obj("org.apache.spark.ml.recommendation.GlintFMPair", self.uid)
         self._setDefault(userCol="userid", itemCol="itemid", userctxfeaturesCol="userctxfeatures",
                          itemfeaturesCol="itemfeatures", samplingCol="", filterItemsCol="",
                          maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                          batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
-                         numParameterServers=3, parameterServerHost="")
+                         numParameterServers=3, parameterServerHost="",
+                         loadMetadata=False, saveMetadata=False, metadataPath="")
         kwargs = self._input_kwargs
         self.setParams(**kwargs)
 
@@ -120,7 +142,8 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
                   itemfeaturesCol="itemfeatures", samplingCol="", filterItemsCol="",
                   maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                   batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
-                  numParameterServers=3, parameterServerHost=""):
+                  numParameterServers=3, parameterServerHost="",
+                  loadMetadata=False, saveMetadata=False, metadataPath=""):
         kwargs = self._input_kwargs
         return self._set(**kwargs)
 
@@ -162,6 +185,15 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
 
     def setParameterServerHost(self, value):
         return self._set(parameterServerHost=value)
+
+    def setLoadMetadata(self, value):
+        return self._set(loadMetadata=value)
+
+    def setSaveMetadata(self, value):
+        return self._set(saveMetadata=value)
+
+    def setMetadataPath(self, value):
+        return self._set(metadataPath=value)
 
     def _create_model(self, java_model):
         return GlintFMPairModel(java_model)

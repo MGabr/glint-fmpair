@@ -156,6 +156,11 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
   private val separateGlintConfig = ConfigFactory.parseResourcesAnySyntax("separate-glint.conf")
 
   /**
+   * Path to save meta data to.
+   */
+  private val metadataPath = "/var/tmp/AOTM-2011-small.meta"
+
+  /**
    * The Spark session to use
    */
   private lazy val s: SparkSession = SparkSession.builder().appName(getClass.getSimpleName).getOrCreate()
@@ -206,6 +211,9 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       .setLinearReg(0.01f)
       .setFactorsReg(0.01f)
       .setNumParameterServers(2)
+      .setMetadataPath(metadataPath)
+      .setSaveMetadata(true)
+      .setLoadMetadata(true)  // to check if the fallback works
 
     val model = fmpair.fit(trainData)
     try {
@@ -251,6 +259,8 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       .setSampler("crossbatch")
       .setSamplingCol("itemid")
       .setMaxIter(100)
+      .setMetadataPath(metadataPath)
+      .setLoadMetadata(true)
 
     val model = fmpair.fit(trainData)
     try {
@@ -276,6 +286,9 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getFactorsReg shouldBe 0.01f
       model.getMaxIter shouldBe 1000
       model.getNumParameterServers shouldBe 2
+      model.getMetadataPath shouldBe metadataPath
+      model.getSaveMetadata shouldBe true
+      model.getLoadMetadata shouldBe true
     } finally {
       model.destroy()
     }
@@ -295,6 +308,8 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getFactorsReg shouldBe 0.01f
       model.getMaxIter shouldBe 1000
       model.getNumParameterServers shouldBe 2
+      model.getMetadataPath shouldBe metadataPath
+      model.getLoadMetadata shouldBe true
 
       // because loaded onto separate Glint cluster
       model.getParameterServerHost shouldEqual InetAddress.getLocalHost.getHostAddress
@@ -320,6 +335,8 @@ class GlintFMPairSpec extends FlatSpec with BeforeAndAfterAll with Matchers with
       model.getNumParameterServers shouldBe 2
       model.getSampler shouldBe "crossbatch"
       model.getSamplingCol shouldBe "itemid"
+      model.getMetadataPath shouldBe metadataPath
+      model.getLoadMetadata shouldBe true
 
       // because loaded onto separate Glint cluster
       model.getParameterServerHost shouldEqual InetAddress.getLocalHost.getHostAddress
