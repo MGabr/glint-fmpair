@@ -690,7 +690,7 @@ class GlintFMPair(override val uid: String)
       dfItems2Exp
         .select(col("exp").divide(expSum), col(getItemfeaturesCol))
         .groupBy()
-        .agg(new WeightedFeatureProbabilityAggregator(1, numFeatures, itemCount).toColumn)
+        .agg(new WeightedFeatureProbabilityAggregator(1, numFeatures).toColumn)
         .as[Array[Float]]
         .collect()(0)
     } else {
@@ -792,6 +792,14 @@ class GlintFMPair(override val uid: String)
   }
 }
 
+
+/**
+ * Aggregator computing the feature probabilities of sparse feature vector columns
+ *
+ * @param numCols The number of columns to aggregate
+ * @param numFeatures The number of features / the size of the sparse feature vectors
+ * @param numRows The number of rows
+ */
 private class FeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRows: Long)
   extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Long], Array[Float]] {
 
@@ -832,7 +840,14 @@ private class FeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRo
   }
 }
 
-private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRows: Long)
+/**
+ * Aggregator computing the weighted feature probabilities of sparse feature vector columns.
+ * The first column has to contain a double with the weighting for the probability
+ *
+ * @param numCols The number of columns to aggregate
+ * @param numFeatures The number of features / the size of the sparse feature vectors
+ */
+private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: Int)
   extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Double], Array[Float]] {
 
   override def zero: PrimitiveKeyOpenHashMap[Int, Double] =
@@ -859,7 +874,7 @@ private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: In
   def finish(map: PrimitiveKeyOpenHashMap[Int, Double]): Array[Float] = {
     val array = new Array[Float](numFeatures)
     map.foreach { case (i: Int, weightedCount: Double) =>
-      array(i) = (weightedCount / numRows.toDouble).toFloat
+      array(i) = weightedCount.toFloat
     }
     array
   }
