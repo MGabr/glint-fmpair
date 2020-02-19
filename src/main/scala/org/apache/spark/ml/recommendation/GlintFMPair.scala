@@ -498,7 +498,7 @@ class GlintFMPair(override val uid: String)
           }.foldLeft(Future.successful(Seq(true))) { case (prevBatchFuture, (iUser, wUser, iItem, wItem, na)) =>
             // wait until communication with parameter servers for previous batches is finished
             // this allows already pre-processing the next batch while waiting for the parameter server responses
-            Await.ready(prevBatchFuture, 1 minute)
+            Await.result(prevBatchFuture, 1 minute)
 
             // communicate with the parameter servers for SGD step
             sampler match {
@@ -531,7 +531,7 @@ class GlintFMPair(override val uid: String)
           }
 
           // wait until communication with parameter servers for last batch is finished
-          Await.ready(fitFinishedFuture, 1 minute)
+          Await.result(fitFinishedFuture, 1 minute)
           ()
         })
 
@@ -872,7 +872,6 @@ private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: In
     Encoders.kryo[Array[Float]]
   }
 }
-
 
 
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
@@ -1217,7 +1216,8 @@ class GlintFMPairModel private[ml](override val uid: String,
               }
             }
         }
-        val (scoresMatrix, argMatrix) = Await.result(topFuture, 5 minutes)
+        val numBatches = math.max(bcItemFeatures.value.length / batchSize, 1)
+        val (scoresMatrix, argMatrix) = Await.result(topFuture, numBatches minutes)
         toRowIter(userIds, userItemIds, argMatrix, scoresMatrix, numItems)
       }
     }(rowEncoder).toDF(getUserCol, "recommendations")
@@ -1329,7 +1329,7 @@ object GlintFMPairModel extends MLReadable[GlintFMPairModel] {
       val savedLinearFuture = instance.linear.save(path + "/linear", sc.hadoopConfiguration)
       val savedFactorsFuture = instance.factors.save(path + "/factors", sc.hadoopConfiguration)
       sc.parallelize(instance.bcItemFeatures.value, 1).saveAsObjectFile(path + "/itemfeatures")
-      Await.ready(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 5 minutes)
+      Await.result(Future.sequence(Seq(savedLinearFuture, savedFactorsFuture)), 5 minutes)
     }
   }
 
