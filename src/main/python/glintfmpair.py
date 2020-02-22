@@ -67,6 +67,11 @@ class _GlintFMPairParams(HasStepSize, HasMaxIter, HasSeed, HasPredictionCol):
     metadataPath = Param(Params._dummy(), "metadataPath",
                          "The HDFS path to load meta data for the fit data frame from or to save the fitted meta data to")
 
+    aggregateDepth = Param(Params._dummy(), "aggregateDepth",
+                           "The depth to use for tree aggregation when computing the meta data. " +
+                           "To avoid OOM errors, this has to be set sufficiently large but lower depths might lead to faster runtimes",
+                           typeConverter=TypeConverters.toInt)
+
     def getUserCol(self):
         return self.getOrDefault(self.userCol)
 
@@ -115,6 +120,9 @@ class _GlintFMPairParams(HasStepSize, HasMaxIter, HasSeed, HasPredictionCol):
     def getMetadataPath(self):
         return self.getOrDefault(self.metadataPath)
 
+    def getAggregateDepth(self):
+        return self.getOrDefault(self.aggregateDepth)
+
 
 @inherit_doc
 class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWritable):
@@ -125,7 +133,7 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
                  maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                  batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
                  numParameterServers=3, parameterServerHost="",
-                 loadMetadata=False, saveMetadata=False, metadataPath=""):
+                 loadMetadata=False, saveMetadata=False, metadataPath="", aggregateDepth=2):
         super(GlintFMPair, self).__init__()
         self._java_obj = self._new_java_obj("org.apache.spark.ml.recommendation.GlintFMPair", self.uid)
         self._setDefault(userCol="userid", itemCol="itemid", userctxfeaturesCol="userctxfeatures",
@@ -133,7 +141,7 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
                          maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                          batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
                          numParameterServers=3, parameterServerHost="",
-                         loadMetadata=False, saveMetadata=False, metadataPath="")
+                         loadMetadata=False, saveMetadata=False, metadataPath="", aggregateDepth=2)
         kwargs = self._input_kwargs
         self.setParams(**kwargs)
 
@@ -143,7 +151,7 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
                   maxIter=1000, stepSize=0.1, seed=1, sampler="uniform", rho=1.0,
                   batchSize=256, numDims=150, linearReg=0.01, factorsReg=0.001,
                   numParameterServers=3, parameterServerHost="",
-                  loadMetadata=False, saveMetadata=False, metadataPath=""):
+                  loadMetadata=False, saveMetadata=False, metadataPath="", aggregateDepth=2):
         kwargs = self._input_kwargs
         return self._set(**kwargs)
 
@@ -194,6 +202,9 @@ class GlintFMPair(JavaEstimator, _GlintFMPairParams, JavaMLReadable, JavaMLWrita
 
     def setMetadataPath(self, value):
         return self._set(metadataPath=value)
+
+    def setAggregateDepth(self, value):
+        return self._set(aggregateDepth=value)
 
     def _create_model(self, java_model):
         return GlintFMPairModel(java_model)

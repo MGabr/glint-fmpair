@@ -303,6 +303,18 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
 
   /** @group getParam */
   def getMetadataPath: String = $(metadataPath)
+
+  /**
+   * The depth to use for tree aggregation when computing the meta data.
+   * To avoid OOM errors, this has to be set sufficiently large but lower depths might lead to faster runtimes
+   */
+  final val aggregateDepth = new IntParam(this, "aggregateDepth",
+    "The depth to use for tree aggregation when computing the meta data. " +
+      "To avoid OOM errors, this has to be set sufficiently large but lower depths might lead to faster runtimes")
+  setDefault(aggregateDepth -> 2)
+
+  /** @group getParam */
+  def getAggregateDepth: Int = $(aggregateDepth)
 }
 
 
@@ -643,7 +655,7 @@ class GlintFMPair(override val uid: String)
                                   numItemFeatures: Int,
                                   numFeatures: Int): (DataFrame, Array[Float], Array[Float], Int) = {
 
-    val featureProbs = GlintFMPair.aggFeatureProbabilities(
+    val featureProbs = aggFeatureProbabilities(
       df.select(getItemfeaturesCol, getUserctxfeaturesCol), 2, numFeatures, df.count())
 
     val dfItem2features = df
@@ -681,11 +693,66 @@ class GlintFMPair(override val uid: String)
 
       val expSum = dfItems2Exp.select("exp").groupBy().sum().first.get(0)
 
-      GlintFMPair.aggWeightedFeatureProbabilities(
+      aggWeightedFeatureProbabilities(
         dfItems2Exp.select(col("exp").divide(expSum), col(getItemfeaturesCol)), 1, numFeatures)
     } else {
-      GlintFMPair.aggFeatureProbabilities(dfItem2features.select(getItemfeaturesCol), 1, numFeatures, itemCount)
+      aggFeatureProbabilities(dfItem2features.select(getItemfeaturesCol), 1, numFeatures, itemCount)
     }
+  }
+
+  /**
+   * Computes the feature probabilities of sparse feature vector columns
+   * through tree aggregation to avoid OOM on the driver
+   *
+   * @param df The dataframe to aggregate, must have sparse vector columns starting at column 0
+   * @param numCols The number of sparse vector columns
+   * @param numFeatures The number of features / the size of the sparse feature vectors
+   * @param numRows The number of rows
+   */
+  def aggFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int, numRows: Long): Array[Float] = {
+    val featureCounts = df.rdd.treeAggregate(new Array[Long](numFeatures))(
+      (arr, row) => {
+        for (iCol <- 0 until numCols) {
+          for (i <- row.getAs[SparseVector](iCol).indices) {
+            arr(i) += 1L
+          }
+        }
+        arr
+      }, (arr1, arr2) => {
+        cforRange(0 until numFeatures){ i =>
+          arr1(i) += arr2(i)
+        }
+        arr1
+      }, getAggregateDepth)
+    featureCounts.map(c => (c.toDouble / numRows.toDouble).toFloat)
+  }
+
+  /**
+   * Computes the weighted feature probabilities of sparse feature vector columns
+   * through tree aggregation to avoid OOM on the driver
+   *
+   * @param df The dataframe to aggregate, must have a double weight column at column 0 and
+   *           sparse vector columns starting at column 1
+   * @param numCols The number of sparse vector columns
+   * @param numFeatures The number of features / the size of the sparse feature vectors
+   */
+  def aggWeightedFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int): Array[Float] = {
+    val featureCounts = df.rdd.treeAggregate(new Array[Double](numFeatures))(
+      (arr, row) => {
+        val weight = row.getDouble(0)
+        for (iCol <- 1 to numCols) {
+          for (i <- row.getAs[SparseVector](iCol).indices) {
+            arr(i) += weight
+          }
+        }
+        arr
+      }, (arr1, arr2) => {
+        cforRange(0 until numFeatures){ i =>
+          arr1(i) += arr2(i)
+        }
+        arr1
+      }, getAggregateDepth)
+    featureCounts.map(_.toFloat)
   }
 
   /**
@@ -797,61 +864,6 @@ object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
   private case class SampledFeatures(userctxFeatures: SparseVector,
                                      positemFeatures: SparseVector,
                                      negitemFeatures: SparseVector)
-
-  /**
-   * Computes the feature probabilities of sparse feature vector columns
-   * through tree aggregation to avoid OOM on the driver
-   *
-   * @param df The dataframe to aggregate, must have sparse vector columns starting at column 0
-   * @param numCols The number of sparse vector columns
-   * @param numFeatures The number of features / the size of the sparse feature vectors
-   * @param numRows The number of rows
-   */
-  def aggFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int, numRows: Long): Array[Float] = {
-    val featureCounts = df.rdd.treeAggregate(new Array[Long](numFeatures))(
-      (arr, row) => {
-        for (iCol <- 0 until numCols) {
-          for (i <- row.getAs[SparseVector](iCol).indices) {
-            arr(i) += 1L
-          }
-        }
-        arr
-      }, (arr1, arr2) => {
-        cforRange(0 until numFeatures){ i =>
-          arr1(i) += arr2(i)
-        }
-        arr1
-      }, 5)
-    featureCounts.map(c => (c.toDouble / numRows.toDouble).toFloat)
-  }
-
-  /**
-   * Computes the weighted feature probabilities of sparse feature vector columns
-   * through tree aggregation to avoid OOM on the driver
-   *
-   * @param df The dataframe to aggregate, must have a double weight column at column 0 and
-   *           sparse vector columns starting at column 1
-   * @param numCols The number of sparse vector columns
-   * @param numFeatures The number of features / the size of the sparse feature vectors
-   */
-  def aggWeightedFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int): Array[Float] = {
-    val featureCounts = df.rdd.treeAggregate(new Array[Double](numFeatures))(
-      (arr, row) => {
-        val weight = row.getDouble(0)
-        for (iCol <- 1 to numCols) {
-          for (i <- row.getAs[SparseVector](iCol).indices) {
-            arr(i) += weight
-          }
-        }
-        arr
-      }, (arr1, arr2) => {
-        cforRange(0 until numFeatures){ i =>
-          arr1(i) += arr2(i)
-        }
-        arr1
-      }, 5)
-    featureCounts.map(_.toFloat)
-  }
 
   /**
    * Samples positive items / interactions by shuffling the interactions in-place.
