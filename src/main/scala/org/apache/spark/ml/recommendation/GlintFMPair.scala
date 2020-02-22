@@ -643,14 +643,8 @@ class GlintFMPair(override val uid: String)
                                   numItemFeatures: Int,
                                   numFeatures: Int): (DataFrame, Array[Float], Array[Float], Int) = {
 
-    implicit val encoder = Encoders.kryo[Array[Float]]
-
-    val featureProbs = df
-      .select(getItemfeaturesCol, getUserctxfeaturesCol)
-      .groupBy()
-      .agg(new FeatureProbabilityAggregator(2, numFeatures, df.count()).toColumn)
-      .as[Array[Float]]
-      .collect()(0)
+    val featureProbs = GlintFMPair.aggFeatureProbabilities(
+      df.select(getItemfeaturesCol, getUserctxfeaturesCol), 2, numFeatures, df.count())
 
     val dfItem2features = df
       .select(getItemCol, getItemfeaturesCol)
@@ -687,19 +681,10 @@ class GlintFMPair(override val uid: String)
 
       val expSum = dfItems2Exp.select("exp").groupBy().sum().first.get(0)
 
-      dfItems2Exp
-        .select(col("exp").divide(expSum), col(getItemfeaturesCol))
-        .groupBy()
-        .agg(new WeightedFeatureProbabilityAggregator(1, numFeatures).toColumn)
-        .as[Array[Float]]
-        .collect()(0)
+      GlintFMPair.aggWeightedFeatureProbabilities(
+        dfItems2Exp.select(col("exp").divide(expSum), col(getItemfeaturesCol)), 1, numFeatures)
     } else {
-      dfItem2features
-        .select(getItemfeaturesCol)
-        .groupBy()
-        .agg(new FeatureProbabilityAggregator(1, numFeatures, itemCount).toColumn)
-        .as[Array[Float]]
-        .collect()(0)
+      GlintFMPair.aggFeatureProbabilities(dfItem2features.select(getItemfeaturesCol), 1, numFeatures, itemCount)
     }
   }
 
@@ -792,103 +777,6 @@ class GlintFMPair(override val uid: String)
   }
 }
 
-
-/**
- * Aggregator computing the feature probabilities of sparse feature vector columns
- *
- * @param numCols The number of columns to aggregate
- * @param numFeatures The number of features / the size of the sparse feature vectors
- * @param numRows The number of rows
- */
-private class FeatureProbabilityAggregator(numCols: Int, numFeatures: Int, numRows: Long)
-  extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Long], Array[Float]] {
-
-  override def zero: PrimitiveKeyOpenHashMap[Int, Long] =
-    new PrimitiveKeyOpenHashMap[Int, Long]()
-
-  def reduce(map: PrimitiveKeyOpenHashMap[Int, Long], row: Row): PrimitiveKeyOpenHashMap[Int, Long] = {
-    for (iCol <- 0 until numCols) {
-      for (i <- row.getAs[SparseVector](iCol).indices) {
-        map.changeValue(i, 1L, _ + 1)
-      }
-    }
-    map
-  }
-
-  def merge(map1: PrimitiveKeyOpenHashMap[Int, Long],
-            map2: PrimitiveKeyOpenHashMap[Int, Long]): PrimitiveKeyOpenHashMap[Int, Long] = {
-    map2.foreach { case (i: Int, count: Long) =>
-      map1.changeValue(i, count, _ + count)
-    }
-    map1
-  }
-
-  def finish(map: PrimitiveKeyOpenHashMap[Int, Long]): Array[Float] = {
-    val array = new Array[Float](numFeatures)
-    map.foreach { case (i: Int, count: Long) =>
-      array(i) = (count.toDouble / numRows.toDouble).toFloat
-    }
-    array
-  }
-
-  override def bufferEncoder: Encoder[PrimitiveKeyOpenHashMap[Int, Long]] = {
-    Encoders.kryo[PrimitiveKeyOpenHashMap[Int, Long]]
-  }
-
-  override def outputEncoder: Encoder[Array[Float]] = {
-    Encoders.kryo[Array[Float]]
-  }
-}
-
-/**
- * Aggregator computing the weighted feature probabilities of sparse feature vector columns.
- * The first column has to contain a double with the weighting for the probability
- *
- * @param numCols The number of columns to aggregate
- * @param numFeatures The number of features / the size of the sparse feature vectors
- */
-private class WeightedFeatureProbabilityAggregator(numCols: Int, numFeatures: Int)
-  extends Aggregator[Row, PrimitiveKeyOpenHashMap[Int, Double], Array[Float]] {
-
-  override def zero: PrimitiveKeyOpenHashMap[Int, Double] =
-    new PrimitiveKeyOpenHashMap[Int, Double]()
-
-  def reduce(map: PrimitiveKeyOpenHashMap[Int, Double], row: Row): PrimitiveKeyOpenHashMap[Int, Double] = {
-    val weight = row.getDouble(0)
-    for (iCol <- 1 to numCols) {
-      for (i <- row.getAs[SparseVector](iCol).indices) {
-        map.changeValue(i, weight, _ + weight)
-      }
-    }
-    map
-  }
-
-  def merge(map1: PrimitiveKeyOpenHashMap[Int, Double],
-            map2: PrimitiveKeyOpenHashMap[Int, Double]): PrimitiveKeyOpenHashMap[Int, Double] = {
-    map2.foreach { case (i: Int, weightedCount: Double) =>
-      map1.changeValue(i, weightedCount, _ + weightedCount)
-    }
-    map1
-  }
-
-  def finish(map: PrimitiveKeyOpenHashMap[Int, Double]): Array[Float] = {
-    val array = new Array[Float](numFeatures)
-    map.foreach { case (i: Int, weightedCount: Double) =>
-      array(i) = weightedCount.toFloat
-    }
-    array
-  }
-
-  override def bufferEncoder: Encoder[PrimitiveKeyOpenHashMap[Int, Double]] = {
-    Encoders.kryo[PrimitiveKeyOpenHashMap[Int, Double]]
-  }
-
-  override def outputEncoder: Encoder[Array[Float]] = {
-    Encoders.kryo[Array[Float]]
-  }
-}
-
-
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
 
   /** The required meta data about the training instances */
@@ -909,6 +797,61 @@ object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
   private case class SampledFeatures(userctxFeatures: SparseVector,
                                      positemFeatures: SparseVector,
                                      negitemFeatures: SparseVector)
+
+  /**
+   * Computes the feature probabilities of sparse feature vector columns
+   * through tree aggregation to avoid OOM on the driver
+   *
+   * @param df The dataframe to aggregate, must have sparse vector columns starting at column 0
+   * @param numCols The number of sparse vector columns
+   * @param numFeatures The number of features / the size of the sparse feature vectors
+   * @param numRows The number of rows
+   */
+  def aggFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int, numRows: Long): Array[Float] = {
+    val featureCounts = df.rdd.treeAggregate(new Array[Long](numFeatures))(
+      (arr, row) => {
+        for (iCol <- 0 until numCols) {
+          for (i <- row.getAs[SparseVector](iCol).indices) {
+            arr(i) += 1L
+          }
+        }
+        arr
+      }, (arr1, arr2) => {
+        cforRange(0 until numFeatures){ i =>
+          arr1(i) += arr2(i)
+        }
+        arr1
+      }, 5)
+    featureCounts.map(c => (c.toDouble / numRows.toDouble).toFloat)
+  }
+
+  /**
+   * Computes the weighted feature probabilities of sparse feature vector columns
+   * through tree aggregation to avoid OOM on the driver
+   *
+   * @param df The dataframe to aggregate, must have a double weight column at column 0 and
+   *           sparse vector columns starting at column 1
+   * @param numCols The number of sparse vector columns
+   * @param numFeatures The number of features / the size of the sparse feature vectors
+   */
+  def aggWeightedFeatureProbabilities(df: DataFrame, numCols: Int, numFeatures: Int): Array[Float] = {
+    val featureCounts = df.rdd.treeAggregate(new Array[Double](numFeatures))(
+      (arr, row) => {
+        val weight = row.getDouble(0)
+        for (iCol <- 1 to numCols) {
+          for (i <- row.getAs[SparseVector](iCol).indices) {
+            arr(i) += weight
+          }
+        }
+        arr
+      }, (arr1, arr2) => {
+        cforRange(0 until numFeatures){ i =>
+          arr1(i) += arr2(i)
+        }
+        arr1
+      }, 5)
+    featureCounts.map(_.toFloat)
+  }
 
   /**
    * Samples positive items / interactions by shuffling the interactions in-place.
