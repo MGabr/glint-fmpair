@@ -16,6 +16,7 @@ import org.apache.spark.ml.param._
 import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, MetaData, SampledFeatures, SampledInteraction}
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
+import org.apache.spark.sql.api.java.UDF2
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.expressions.{Aggregator, Window}
 import org.apache.spark.sql.functions._
@@ -311,7 +312,7 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
   final val treeDepth = new IntParam(this, "treeDepth",
     "The depth to use for tree reduce when computing the meta data. " +
       "To avoid OOM errors, this has to be set sufficiently large but lower depths might lead to faster runtimes")
-  setDefault(treeDepth -> 2)
+  setDefault(treeDepth -> 3)
 
   /** @group getParam */
   def getTreeDepth: Int = $(treeDepth)
@@ -562,7 +563,7 @@ class GlintFMPair(override val uid: String)
   }
 
   /**
-   * Converts a data set a data frames required for this model. If the features have separate index ranges,
+   * Converts the data set to a data frame required for this model. If the features have separate index ranges,
    * the user / context feature indices are shifted so that they start after the item feature indices
    */
   private def toDF(dataset: Dataset[_]): (DataFrame, Int, Int) = {
@@ -575,7 +576,7 @@ class GlintFMPair(override val uid: String)
       numItemFeatures + numUserctxFeatures
     }
 
-    var cols = Array(col(getUserCol), col(getItemCol))
+    var cols = Array(col(getUserCol).cast(IntegerType), col(getItemCol).cast(IntegerType))
     if (numItemFeatures == numFeatures) {
       cols = cols :+ col(getItemfeaturesCol)
       cols = cols :+ col(getUserctxfeaturesCol)
@@ -588,7 +589,7 @@ class GlintFMPair(override val uid: String)
       cols = cols :+ shift(col(getUserctxfeaturesCol)).as(getUserctxfeaturesCol)
     }
     if (getSamplingCol.nonEmpty && getSamplingCol != getItemCol) {
-      cols = cols :+ col(getSamplingCol)
+      cols = cols :+ col(getSamplingCol).cast(IntegerType)
     }
     val df = dataset.select(cols :_*)
 
@@ -704,10 +705,10 @@ class GlintFMPair(override val uid: String)
       var count = 0L
       var featureCounts = new Array[Long](0)
       for (row <- iter) {
-        if (count == 0) {
+        if (count == 0L) {
           featureCounts = new Array[Long](row.getAs[SparseVector](0).size)
         }
-        count += 1
+        count += 1L
         for (iCol <- 0 until numCols) {
           for (i <- row.getAs[SparseVector](iCol).indices) {
             featureCounts(i) += 1L
@@ -718,10 +719,14 @@ class GlintFMPair(override val uid: String)
     }.treeReduce( (p1, p2) => {
       val (count1, featureCounts1) = p1
       val (count2, featureCounts2) = p2
-      cforRange(0 until featureCounts2.length) { i =>
-        featureCounts1(i) += featureCounts2(i)
+      if (count1 == 0L) {
+        (count2, featureCounts2)
+      } else {
+        cforRange(0 until featureCounts2.length) { i =>
+          featureCounts1(i) += featureCounts2(i)
+        }
+        (count1 + count2, featureCounts1)
       }
-      (count1 + count2, featureCounts1)
     }, getTreeDepth)
     featureCounts.map(c => (c.toDouble / count.toDouble).toFloat)
   }
@@ -747,10 +752,14 @@ class GlintFMPair(override val uid: String)
       }
       Iterator(featureProbs)
     }.treeReduce( (featureProbs1, featureProbs2) => {
-      cforRange(0 until featureProbs2.length) { i =>
-        featureProbs1(i) += featureProbs2(i)
+      if (featureProbs1.length == 0) {
+        featureProbs2
+      } else {
+        cforRange(0 until featureProbs2.length) { i =>
+          featureProbs1(i) += featureProbs2(i)
+        }
+        featureProbs1
       }
-      featureProbs1
     }, getTreeDepth).map(_.toFloat)
   }
 
@@ -842,6 +851,16 @@ class GlintFMPair(override val uid: String)
     schema
   }
 }
+
+/**
+ * UDF to resize a sparse vector to the same size as another sparse vector
+ */
+class ResizeVector extends UDF2[SparseVector, SparseVector, SparseVector] {
+  override def call(vector1: SparseVector, vector2: SparseVector): SparseVector = {
+    new SparseVector(vector2.size, vector1.indices, vector1.values)
+  }
+}
+
 
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
 
