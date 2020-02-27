@@ -511,7 +511,7 @@ class GlintFMPair(override val uid: String)
           }.foldLeft(Future.successful(Seq(true))) { case (prevBatchFuture, (iUser, wUser, iItem, wItem, na)) =>
             // wait until communication with parameter servers for previous batches is finished
             // this allows already pre-processing the next batch while waiting for the parameter server responses
-            Await.result(prevBatchFuture, 1 minute)
+            Await.result(prevBatchFuture, 5 minute)
 
             // communicate with the parameter servers for SGD step
             sampler match {
@@ -544,7 +544,7 @@ class GlintFMPair(override val uid: String)
           }
 
           // wait until communication with parameter servers for last batch is finished
-          Await.result(fitFinishedFuture, 1 minute)
+          Await.result(fitFinishedFuture, 5 minute)
           ()
         })
 
@@ -1175,7 +1175,7 @@ class GlintFMPairModel private[ml](override val uid: String,
               val itemFactorsFuture = factors.pullSum(itemIndices, itemWeights, false)
 
               // wait until communication with parameter servers for previous batches is finished
-              var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 1 minute)
+              var (scoresMatrix, argMatrix) = Await.result(prevBatchFuture, 5 minute)
 
               for {
                 (itemLinear, _) <- itemLinearFuture
@@ -1204,7 +1204,7 @@ class GlintFMPairModel private[ml](override val uid: String,
               }
             }
         }
-        val numBatches = math.max(bcItemFeatures.value.length / batchSize, 1)
+        val numBatches = math.max(bcItemFeatures.value.length / batchSize, 5)
         val (scoresMatrix, argMatrix) = Await.result(topFuture, numBatches minutes)
         toRowIter(userIds, userItemIds, argMatrix, scoresMatrix, numItems)
       }
