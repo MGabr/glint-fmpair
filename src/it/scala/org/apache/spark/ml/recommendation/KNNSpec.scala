@@ -2,20 +2,20 @@ package org.apache.spark.ml.recommendation
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
 
 import scala.collection.mutable
 
-object SAGHSpec {
+object KNNSpec {
 
   /**
    * Helper function to load preprocessed csv data from path as dataframe
    */
   def load(s: SparkSession, dataPath: String): DataFrame = {
     s.read.format("csv").option("header", "true").option("inferSchema", "true").load(dataPath)
-      .select(col("pid").as("userid"), col("traid").as("itemid"), col("artid"))
+      .select(col("pid").as("userid"), col("traid").as("itemid"))
   }
 
   /**
@@ -35,7 +35,7 @@ object SAGHSpec {
   }
 }
 
-class SAGHSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors{
+class KNNSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
 
   /**
    * Path to small preprocessed subsets of the AOTM-2011 dataset.
@@ -48,12 +48,6 @@ class SAGHSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspec
   private val traindataPath = "AOTM-2011-small-train.csv"
   private val testquerydataPath = "AOTM-2011-small-test-queryseeds.csv"
   private val testdataPath = "AOTM-2011-small-test.csv"
-
-  /**
-   * Path to save model to. The first test will create it and subsequent tests will rely on it being present
-   */
-  private val modelPath = "/var/tmp/AOTM-2011-small.model"
-  private var modelCreated = false
 
   /**
    * The Spark session to use
@@ -71,63 +65,36 @@ class SAGHSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspec
   }
 
   override def afterAll(): Unit = {
-    val fs = FileSystem.get(new Configuration())
-    fs.delete(new Path(modelPath), true)
-
     s.stop()
   }
 
-  "SAGH" should "train and save a model" in {
-    val traindata = SAGHSpec.load(s, traindataPath)
+  "KNN" should "have a high enough hit rate and ndcg for the top 50 recommendations" in {
 
-    val model = new SAGH().fit(traindata)
+    val traindata = KNNSpec.load(s, traindataPath)
+    val testdata = KNNSpec.load(s, testdataPath)
+    val testquerydata = KNNSpec.load(s, testquerydataPath)
 
-    model.save(modelPath)
-    FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(modelPath)) shouldBe true
-    modelCreated = true
-  }
+    val knn = new KNN().setK(150)
 
-  it should "load a model" in {
-    if (!modelCreated) {
-      pending
-    }
+    val (hitRate, ndcg) = KNNSpec.toHitRateAndNDCG(
+      knn.recommendForUserSubset(testquerydata, traindata, 50).join(testdata, "userid"))
 
-    val model = SAGHModel.load(modelPath)
-    model.getUserCol shouldBe "userid"
-    model.getItemCol shouldBe "itemid"
-  }
-
-  it should "have a high enough hit rate and ndcg for the top 50 recommendations" in {
-    if (!modelCreated) {
-      pending
-    }
-
-    val testdata = SAGHSpec.load(s, testdataPath)
-    val testquerydata = SAGHSpec.load(s, testquerydataPath)
-
-    val model = SAGHModel.load(modelPath)
-
-    val (hitRate, ndcg) = SAGHSpec.toHitRateAndNDCG(
-      model.recommendForUserSubset(testquerydata, 50).join(testdata, "userid"))
-
-    hitRate should be >= 0.1
-    ndcg should be > 0.04
+    hitRate should be >= 0.32
+    ndcg should be > 0.19
   }
 
   it should "have a high enough hit rate and ndcg for the top 50 recommendations - filter user items" in {
-    if (!modelCreated) {
-      pending
-    }
 
-    val testdata = SAGHSpec.load(s, testdataPath)
-    val testquerydata = SAGHSpec.load(s, testquerydataPath)
+    val traindata = KNNSpec.load(s, traindataPath)
+    val testdata = KNNSpec.load(s, testdataPath)
+    val testquerydata = KNNSpec.load(s, testquerydataPath)
 
-    val model = SAGHModel.load(modelPath).setFilterUserItems(true)
+    val knn = new KNN().setK(150).setFilterUserItems(true)
 
-    val (hitRate, ndcg) = SAGHSpec.toHitRateAndNDCG(
-      model.recommendForUserSubset(testquerydata, 50).join(testdata, "userid"))
+    val (hitRate, ndcg) = KNNSpec.toHitRateAndNDCG(
+      knn.recommendForUserSubset(testquerydata, traindata, 50).join(testdata, "userid"))
 
-    hitRate should be > 0.09
-    ndcg should be > 0.039
+    hitRate should be >= 0.32
+    ndcg should be > 0.26
   }
 }

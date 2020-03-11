@@ -134,10 +134,11 @@ class PopRankModel private[ml](override val uid: String, val itemCounts: DataFra
     val recommendDf = if (getFilterUserItems) {
       val userWindow = Window.partitionBy(getUserCol).orderBy(desc("score"), asc("itemid"))
       dataset
-        .select(col(getUserCol), col(getItemCol).as("useritemid"))
+        .select(col(getUserCol), col(getItemCol))
+        .groupBy(getUserCol)
+        .agg(collect_set(getItemCol).alias("filterItems"))
         .crossJoin(topItemCountsDf)
-        .filter(col("useritemid").notEqual(col(getItemCol)))
-        .dropDuplicates(getUserCol, getItemCol)
+        .filter(not(array_contains(col("filterItems"), col(getItemCol))))
         // get top numItems
         .select(col(getUserCol), col(getItemCol), col("score"), row_number().over(userWindow).as("userrowno"))
         .filter(col("userrowno").leq(numItems))

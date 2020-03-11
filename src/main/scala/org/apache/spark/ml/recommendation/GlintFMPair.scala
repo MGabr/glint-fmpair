@@ -861,6 +861,18 @@ class ResizeVector extends UDF2[SparseVector, SparseVector, SparseVector] {
   }
 }
 
+/**
+ * UDF to multiply a sparse vector by a weight and divide it by the number of values
+ */
+class WeighVector extends UDF2[SparseVector, Double, SparseVector] {
+  override def call(vector: SparseVector, weight: Double): SparseVector = {
+    cforRange(0 until vector.values.length){ i =>
+      vector.values(i) = (weight * vector.values(i)) / math.sqrt(vector.indices.length)
+    }
+    vector
+  }
+}
+
 
 object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
 

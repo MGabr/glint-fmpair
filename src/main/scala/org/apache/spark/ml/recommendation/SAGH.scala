@@ -127,21 +127,23 @@ class SAGHModel private[ml](override val uid: String, val itemCounts: DataFrame)
    */
   def recommendForUserSubset(dataset: Dataset[_], numItems: Int): DataFrame = {
 
-    val recommendDf = if (getFilterUserItems) {
-      dataset
-        .select(col(getUserCol), col(getArtistCol), col(getItemCol).as("useritemid"))
-        .join(itemCounts, getArtistCol)
-        .filter(col("useritemid").notEqual(col(getItemCol)))
-        .dropDuplicates(getUserCol, getItemCol)
-    } else {
-      dataset
+    var recommendDf = dataset
         .select(getUserCol, getArtistCol)
         .distinct()
         .join(itemCounts, getArtistCol)
+
+    if (getFilterUserItems) {
+      // filter items of user him/herself
+      val filterDf = dataset
+        .select(col(getUserCol), col(getItemCol))
+        .groupBy(getUserCol)
+        .agg(collect_set(getItemCol).alias("filterItems"))
+      recommendDf = recommendDf
+        .join(filterDf, getUserCol)
+        .filter(not(array_contains(col("filterItems"), col(getItemCol))))
     }
 
     val window = Window.partitionBy(getUserCol).orderBy(desc("score"), asc("itemid"))
-
     recommendDf
       // get top numItems
       .select(col(getUserCol), col(getItemCol), col("score"), row_number().over(window).as("rowno"))

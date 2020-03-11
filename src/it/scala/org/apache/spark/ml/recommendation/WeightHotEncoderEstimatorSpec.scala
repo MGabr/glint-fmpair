@@ -6,7 +6,7 @@ import org.apache.spark.ml.feature.{WeightHotEncoderEstimator, WeightHotEncoderM
 import org.apache.spark.ml.linalg.{SparseVector, Vectors}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
-import org.scalatest.{BeforeAndAfterAll, FlatSpec, Ignore, Inspectors, Matchers}
+import org.scalatest.{BeforeAndAfterAll, FlatSpec, Inspectors, Matchers}
 
 object WeightHotEncoderEstimatorSpec {
 

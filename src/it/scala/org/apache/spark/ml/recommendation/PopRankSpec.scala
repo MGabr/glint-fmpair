@@ -17,6 +17,22 @@ object PopRankSpec {
     s.read.format("csv").option("header", "true").option("inferSchema", "true").load(dataPath)
       .select(col("pid").as("userid"), col("traid").as("itemid"))
   }
+
+  /**
+   * Computes the mean hit rate and mean normalized discounted cumulative gain for the recommendations data frame
+   */
+  def toHitRateAndNDCG(data: DataFrame): (Double, Double) = {
+    val dcgs = data.rdd
+      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
+      .map { case (item, recs) =>
+        recs.zipWithIndex.map { case (rec, i) =>
+          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
+        }.sum
+      }.collect()
+    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
+    val ndcg = dcgs.sum / dcgs.length
+    (hitRate, ndcg)
+  }
 }
 
 class PopRankSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspectors {
@@ -91,18 +107,8 @@ class PopRankSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Ins
 
     val model = PopRankModel.load(modelPath)
 
-    val dcgs = model.recommendForUserSubset(testquerydata, 50)
-      .join(testdata, "userid")
-      .rdd
-      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-      .map { case (item, recs) =>
-        recs.zipWithIndex.map { case (rec, i) =>
-          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-        }.sum
-      }.collect()
-
-    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-    val ndcg = dcgs.sum / dcgs.length
+    val (hitRate, ndcg) = PopRankSpec.toHitRateAndNDCG(
+      model.recommendForUserSubset(testquerydata, 50).join(testdata, "userid"))
 
     hitRate should be >= 0.34
     ndcg should be > 0.27
@@ -114,22 +120,12 @@ class PopRankSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Ins
     }
 
     val testdata = PopRankSpec.load(s, testdataPath)
-    val testquerydata = SAGHSpec.load(s, testquerydataPath)
+    val testquerydata = PopRankSpec.load(s, testquerydataPath)
 
     val model = PopRankModel.load(modelPath).setFilterUserItems(true)
 
-    val dcgs = model.recommendForUserSubset(testquerydata, 50)
-      .join(testdata, "userid")
-      .rdd
-      .map(row => (row.getAs[Int]("itemid"), row.getAs[mutable.WrappedArray[Row]]("recommendations")))
-      .map { case (item, recs) =>
-        recs.zipWithIndex.map { case (rec, i) =>
-          if (rec.getAs[Int]("itemid") == item) 1.0 / (math.log10(i + 2) / math.log10(2)) else 0.0
-        }.sum
-      }.collect()
-
-    val hitRate = dcgs.count(dcg => dcg != 0.0).toDouble / dcgs.length
-    val ndcg = dcgs.sum / dcgs.length
+    val (hitRate, ndcg) = PopRankSpec.toHitRateAndNDCG(
+      model.recommendForUserSubset(testquerydata, 50).join(testdata, "userid"))
 
     hitRate should be >= 0.34
     ndcg should be > 0.27
