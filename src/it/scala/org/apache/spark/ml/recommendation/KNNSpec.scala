@@ -50,6 +50,12 @@ class KNNSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspect
   private val testdataPath = "AOTM-2011-small-test.csv"
 
   /**
+   * Path to save model to. The first test will create it and subsequent tests will rely on it being present
+   */
+  private val modelPath = "/var/tmp/AOTM-2011-small.model"
+  private var modelCreated = false
+
+  /**
    * The Spark session to use
    */
   private lazy val s: SparkSession = SparkSession.builder().appName(getClass.getSimpleName).getOrCreate()
@@ -65,6 +71,9 @@ class KNNSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspect
   }
 
   override def afterAll(): Unit = {
+    val fs = FileSystem.get(new Configuration())
+    fs.delete(new Path(modelPath), true)
+
     s.stop()
   }
 
@@ -96,5 +105,42 @@ class KNNSpec extends FlatSpec with BeforeAndAfterAll with Matchers with Inspect
 
     hitRate should be >= 0.32
     ndcg should be > 0.26
+  }
+
+  "TfIdfKNN" should "train and save a model" in {
+    val traindata = KNNSpec.load(s, traindataPath)
+
+    val model = new TfIdfKNN().setK(150).setFilterUserItems(true).fit(traindata)
+
+    model.save(modelPath)
+    FileSystem.get(s.sparkContext.hadoopConfiguration).exists(new Path(modelPath)) shouldBe true
+    modelCreated = true
+  }
+
+  it should "load a model" in {
+    if (!modelCreated) {
+      pending
+    }
+
+    val model = TfIdfKNNModel.load(modelPath)
+    model.getUserCol shouldBe "userid"
+    model.getItemCol shouldBe "itemid"
+  }
+
+  it should "have a high enough hit rate and ndcg for the top 50 recommendations" in {
+    if (!modelCreated) {
+      pending
+    }
+
+    val testdata = KNNSpec.load(s, testdataPath)
+    val testquerydata = KNNSpec.load(s, testquerydataPath)
+
+    val model = TfIdfKNNModel.load(modelPath)
+
+    val (hitRate, ndcg) = KNNSpec.toHitRateAndNDCG(
+      model.recommendForUserSubset(testquerydata, 50).join(testdata, "userid"))
+
+    hitRate should be >= 0.35
+    ndcg should be > 0.17
   }
 }

@@ -47,6 +47,19 @@ private[recommendation] trait SAGHParams extends Params with HasPredictionCol {
   /** @group getParam */
   def getArtistCol: String = $(artistCol)
 
+  /**
+   * Whether the overall frequency of items should be used instead of the frequency of items per user
+   * Default: false
+   *
+   * @group param
+   */
+  final val allItemsFrequency = new BooleanParam(this, "allItemsFrequency",
+    "whether the overall frequency of items should be used instead of the frequency of items per user")
+  setDefault(allItemsFrequency -> false)
+
+  /** @group getParam */
+  def getAllItemsFrequency: Boolean = $(allItemsFrequency)
+
 
   /**
    * Whether the items of a user should be filtered from the recommendations for the user
@@ -75,9 +88,15 @@ class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParam
   /** @group setParam */
   def setPredictionCol(value: String): this.type = set(predictionCol, value)
 
+  /** @group setParam */
+  def setAllItemsFrequency(value: Boolean): this.type = set(allItemsFrequency, value)
+
   override def fit(dataset: Dataset[_]): SAGHModel = {
-    val itemCounts = dataset.select(getItemCol, getArtistCol, getUserCol)
-      .distinct()
+    var itemCounts = dataset.select(getItemCol, getArtistCol, getUserCol)
+    if (!getAllItemsFrequency) {
+      itemCounts = itemCounts.distinct()
+    }
+    itemCounts = itemCounts
       .groupBy(getItemCol, getArtistCol)
       .agg(count(getUserCol).as("score"))
       .orderBy(desc("score"), asc(getItemCol))

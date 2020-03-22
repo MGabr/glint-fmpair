@@ -290,6 +290,10 @@ class _PopRankParams(HasPredictionCol):
     itemCol = Param(Params._dummy(), "itemCol", "the name of the item id column",
                     typeConverter=TypeConverters.toString)
 
+    allItemsFrequency = Param(Params._dummy(), "allItemsFrequency",
+                              "whether the overall frequency of items should be used instead of the frequency of items per user",
+                              typeConverter=TypeConverters.toBoolean)
+
     filterUserItems = Param(Params._dummy(), "filterUserItems",
                             "whether the items of a user should be filtered from the recommendations for the user",
                             typeConverter=TypeConverters.toBoolean)
@@ -299,6 +303,9 @@ class _PopRankParams(HasPredictionCol):
 
     def getItemCol(self):
         return self.getOrDefault(self.itemCol)
+
+    def getAllItemsFrequency(self):
+        return self.getOrDefault(self.allItemsFrequency)
 
     def getFilterUserItems(self):
         return self.getOrDefault(self.filterUserItems)
@@ -310,16 +317,16 @@ class PopRank(JavaEstimator, _PopRankParams, JavaMLReadable, JavaMLWritable):
     __module__ = "pyspark.ml.recommendation"
 
     @keyword_only
-    def __init__(self, userCol="userid", itemCol="itemid", filterUserItems=False):
+    def __init__(self, userCol="userid", itemCol="itemid", allItemsFrequency=False, filterUserItems=False):
         super(PopRank, self).__init__()
         self._java_obj = self._new_java_obj(
             "org.apache.spark.ml.recommendation.PopRank", self.uid)
-        self._setDefault(userCol="userid", itemCol="itemid", filterUserItems=False)
+        self._setDefault(userCol="userid", itemCol="itemid", allItemsFrequency=False, filterUserItems=False)
         kwargs = self._input_kwargs
         self.setParams(**kwargs)
 
     @keyword_only
-    def setParams(self, userCol="userid", itemCol="itemid", filterUserItems=False):
+    def setParams(self, userCol="userid", itemCol="itemid", allItemsFrequency=False, filterUserItems=False):
         kwargs = self._input_kwargs
         return self._set(**kwargs)
 
@@ -328,6 +335,9 @@ class PopRank(JavaEstimator, _PopRankParams, JavaMLReadable, JavaMLWritable):
 
     def setItemCol(self, value):
         return self._set(itemCol=value)
+
+    def setAllItemsFrequency(self, value):
+        return self._set(allItemsFrequency=value)
 
     def setFilterUserItems(self, value):
         return self._set(filterUserItems=value)
@@ -379,6 +389,10 @@ class _SAGHParams(HasPredictionCol):
     artistCol = Param(Params._dummy(), "artistCol", "the name of the artist id column",
                       typeConverter=TypeConverters.toString)
 
+    allItemsFrequency = Param(Params._dummy(), "allItemsFrequency",
+                              "whether the overall frequency of items should be used instead of the frequency of items per user",
+                              typeConverter=TypeConverters.toBoolean)
+
     filterUserItems = Param(Params._dummy(), "filterUserItems",
                             "whether the items of a user should be filtered from the recommendations for the user",
                             typeConverter=TypeConverters.toBoolean)
@@ -392,6 +406,9 @@ class _SAGHParams(HasPredictionCol):
     def getArtistCol(self):
         return self.getOrDefault(self.artistCol)
 
+    def getAllItemsFrequency(self):
+        return self.getOrDefault(self.allItemsFrequency)
+
     def getFilterUserItems(self):
         return self.getOrDefault(self.filterUserItems)
 
@@ -402,16 +419,18 @@ class SAGH(JavaEstimator, _SAGHParams, JavaMLReadable, JavaMLWritable):
     __module__ = "pyspark.ml.recommendation"
 
     @keyword_only
-    def __init__(self, userCol="userid", itemCol="itemid", filterUserItems=False):
+    def __init__(self, userCol="userid", itemCol="itemid", allItemsFrequency=False, filterUserItems=False):
         super(SAGH, self).__init__()
         self._java_obj = self._new_java_obj(
             "org.apache.spark.ml.recommendation.SAGH", self.uid)
-        self._setDefault(userCol="userid", itemCol="itemid", artistCol="artid", filterUserItems=False)
+        self._setDefault(userCol="userid", itemCol="itemid", artistCol="artid", allItemsFrequency=False,
+                         filterUserItems=False)
         kwargs = self._input_kwargs
         self.setParams(**kwargs)
 
     @keyword_only
-    def setParams(self, userCol="userid", itemCol="itemid", artistCol="artid", filterUserItems=False):
+    def setParams(self, userCol="userid", itemCol="itemid", artistCol="artid", allItemsFrequency=False,
+                  filterUserItems=False):
         kwargs = self._input_kwargs
         return self._set(**kwargs)
 
@@ -423,6 +442,9 @@ class SAGH(JavaEstimator, _SAGHParams, JavaMLReadable, JavaMLWritable):
 
     def setArtistCol(self, value):
         return self._set(artistCol=value)
+
+    def setAllItemsFrequency(self, value):
+        return self._set(allItemsFrequency=value)
 
     def setFilterUserItems(self, value):
         return self._set(filterUserItems=value)
@@ -536,6 +558,70 @@ class KNN(JavaTransformer, _KNNParams, JavaMLReadable, JavaMLWritable):
 
 
 recommendation.KNN = KNN
+
+
+class TfIdfKNN(JavaEstimator, _KNNParams, JavaMLReadable, JavaMLWritable):
+
+    __module__ = "pyspark.ml.recommendation"
+
+    @keyword_only
+    def __init__(self, userCol="userid", itemCol="itemid", k=None, filterUserItems=False):
+        super(TfIdfKNN, self).__init__()
+        self._java_obj = self._new_java_obj(
+            "org.apache.spark.ml.recommendation.TfIdfKNN", self.uid)
+        self._setDefault(userCol="userid", itemCol="itemid", filterUserItems=False)
+        kwargs = self._input_kwargs
+        self.setParams(**kwargs)
+
+    @keyword_only
+    def setParams(self, userCol="userid", itemCol="itemid", k=None, filterUserItems=False):
+        kwargs = self._input_kwargs
+        return self._set(**kwargs)
+
+    def setUserCol(self, value):
+        return self._set(userCol=value)
+
+    def setItemCol(self, value):
+        return self._set(itemCol=value)
+
+    def setK(self, value):
+        return self._set(k=value)
+
+    def setFilterUserItems(self, value):
+        return self._set(filterUserItems=value)
+
+    def _create_model(self, java_model):
+        return TfIdfKNNModel(java_model)
+
+
+recommendation.TfIdfKNN = TfIdfKNN
+
+
+class TfIdfKNNModel(JavaTransformer, _KNNParams, JavaMLReadable, JavaMLWritable):
+
+    __module__ = "pyspark.ml.recommendation"
+
+    def setK(self, value):
+        return self._set(k=value)
+
+    def setFilterUserItems(self, value):
+        return self._set(filterUserItems=value)
+
+    def recommendForUserSubset(self, dataset, numItems):
+        """
+        Returns top numItems items recommended for each user id in the input data set
+
+        :param dataset  The dataset containing a column of user ids. The column name must match userCol
+        :param numItems The maximum number of recommendations for each user
+        :return A dataframe of (userCol: Int, recommendations), where recommendations are stored
+                as an array of (score: Float, itemCol: Int) rows. Or if exploded
+                a dataframe of (userCol: Int, score: Float, itemCol: Int) rows.
+        """
+        self._transfer_params_to_java()
+        return self._call_java("recommendForUserSubset", dataset, numItems)
+
+
+recommendation.TfIdfKNNModel = TfIdfKNNModel
 
 
 class _WeightHotEncoderParams(HasInputCols, HasOutputCols, HasHandleInvalid):

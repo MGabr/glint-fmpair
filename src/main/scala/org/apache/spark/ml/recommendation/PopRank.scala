@@ -35,6 +35,18 @@ private[recommendation] trait PopRankParams extends Params with HasPredictionCol
   /** @group getParam */
   def getItemCol: String = $(itemCol)
 
+  /**
+   * Whether the overall frequency of items should be used instead of the frequency of items per user
+   * Default: false
+   *
+   * @group param
+   */
+  final val allItemsFrequency = new BooleanParam(this, "allItemsFrequency",
+    "whether the overall frequency of items should be used instead of the frequency of items per user")
+  setDefault(allItemsFrequency -> false)
+
+  /** @group getParam */
+  def getAllItemsFrequency: Boolean = $(allItemsFrequency)
 
   /**
    * Whether the items of a user should be filtered from the recommendations for the user
@@ -60,9 +72,15 @@ class PopRank(override val uid: String) extends Estimator[PopRankModel] with Pop
   /** @group setParam */
   def setPredictionCol(value: String): this.type = set(predictionCol, value)
 
+  /** @group setParam */
+  def setAllItemsFrequency(value: Boolean): this.type = set(allItemsFrequency, value)
+
   override def fit(dataset: Dataset[_]): PopRankModel = {
-    val itemCounts = dataset.select(getItemCol, getUserCol)
-      .distinct()
+    var itemCounts = dataset.select(getItemCol, getUserCol)
+    if (!getAllItemsFrequency) {
+      itemCounts = itemCounts.distinct()
+    }
+    itemCounts = itemCounts
       .groupBy(getItemCol)
       .agg(count(getUserCol).as("score"))
       .orderBy(desc("score"), asc("itemid"))
