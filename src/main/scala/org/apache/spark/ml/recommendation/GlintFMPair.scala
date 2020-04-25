@@ -2,7 +2,7 @@ package org.apache.spark.ml.recommendation
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
 
-import breeze.linalg.{sum => breezeSum, _}
+import breeze.linalg.{rank => breezeRank, sum => breezeSum, _}
 import breeze.numerics.sigmoid
 import com.typesafe.config._
 import glint.models.client.{BigFMPairMatrix, BigFMPairVector}
