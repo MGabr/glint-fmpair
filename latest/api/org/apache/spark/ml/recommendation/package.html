@@ -1,0 +1,387 @@
+<!DOCTYPE html >
+<html>
+        <head>
+          <title>recommendation - Glint-FMPair - org.apache.spark.ml.recommendation</title>
+          <meta name="description" content="recommendation - Glint - FMPair - org.apache.spark.ml.recommendation" />
+          <meta name="keywords" content="recommendation Glint FMPair org.apache.spark.ml.recommendation" />
+          <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+          
+      <link href="../../../../../lib/template.css" media="screen" type="text/css" rel="stylesheet" />
+      <link href="../../../../../lib/diagrams.css" media="screen" type="text/css" rel="stylesheet" id="diagrams-css" />
+      <script type="text/javascript" src="../../../../../lib/jquery.js" id="jquery-js"></script>
+      <script type="text/javascript" src="../../../../../lib/jquery-ui.js"></script>
+      <script type="text/javascript" src="../../../../../lib/template.js"></script>
+      <script type="text/javascript" src="../../../../../lib/tools.tooltip.js"></script>
+      
+      <script type="text/javascript">
+         if(top === self) {
+            var url = '../../../../../index.html';
+            var hash = 'org.apache.spark.ml.recommendation.package';
+            var anchor = window.location.hash;
+            var anchor_opt = '';
+            if (anchor.length >= 1)
+              anchor_opt = '@' + anchor.substring(1);
+            window.location.href = url + '#' + hash + anchor_opt;
+         }
+   	  </script>
+    
+        </head>
+        <body class="value">
+      <div id="definition">
+        <img alt="Package" src="../../../../../lib/package_big.png" />
+        <p id="owner"><a href="../../../../package.html" class="extype" name="org">org</a>.<a href="../../../package.html" class="extype" name="org.apache">apache</a>.<a href="../../package.html" class="extype" name="org.apache.spark">spark</a>.<a href="../package.html" class="extype" name="org.apache.spark.ml">ml</a></p>
+        <h1>recommendation</h1><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      </div>
+
+      <h4 id="signature" class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">package</span>
+      </span>
+      <span class="symbol">
+        <span class="name">recommendation</span>
+      </span>
+      </h4>
+      
+          <div id="comment" class="fullcommenttop"></div>
+        
+
+      <div id="mbrsel">
+        <div id="textfilter"><span class="pre"></span><span class="input"><input id="mbrsel-input" type="text" accesskey="/" /></span><span class="post"></span></div>
+        
+        
+        <div id="visbl">
+            <span class="filtertype">Visibility</span>
+            <ol><li class="public in"><span>Public</span></li><li class="all out"><span>All</span></li></ol>
+          </div>
+      </div>
+
+      <div id="template">
+        <div id="allMembers">
+        
+
+        <div id="types" class="types members">
+              <h3>Type Members</h3>
+              <ol><li name="org.apache.spark.ml.recommendation.GlintFMPair" visbl="pub" data-isabs="false" fullComment="yes" group="Ungrouped">
+      <a id="GlintFMPairextendsEstimator[org.apache.spark.ml.recommendation.GlintFMPairModel]withGlintFMPairParamswithDefaultParamsWritable"></a>
+      <a id="GlintFMPair:GlintFMPair"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="GlintFMPair.html"><span class="name">GlintFMPair</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Estimator">Estimator</span>[<a href="GlintFMPairModel.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPairModel">GlintFMPairModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.GlintFMPairParams">GlintFMPairParams</span> with <span class="extype" name="org.apache.spark.ml.util.DefaultParamsWritable">DefaultParamsWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@GlintFMPairextendsEstimator[org.apache.spark.ml.recommendation.GlintFMPairModel]withGlintFMPairParamswithDefaultParamsWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Distributed pairwise factorization machine / LightFM.</p><div class="fullcomment"><div class="comment cmt"><p>Distributed pairwise factorization machine / LightFM.</p><p>Pairwise factorization machines are trained on implicit-feedback training instances
+to rank all items with observed user-item training instances above all other items for the user,
+using bayesian personalized ranking.</p><p>This is an implementation using Glint parameter servers with custom methods for network-efficient training.
+A Spark application with the parameter servers has to be started beforehand
+and the host of the parameter server master given as parameter to this implementation.
+</p></div></div>
+    </li><li name="org.apache.spark.ml.recommendation.GlintFMPairModel" visbl="pub" data-isabs="false" fullComment="yes" group="Ungrouped">
+      <a id="GlintFMPairModelextendsModel[org.apache.spark.ml.recommendation.GlintFMPairModel]withGlintFMPairParamswithMLWritable"></a>
+      <a id="GlintFMPairModel:GlintFMPairModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="GlintFMPairModel.html"><span class="name">GlintFMPairModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Model">Model</span>[<a href="GlintFMPairModel.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPairModel">GlintFMPairModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.GlintFMPairParams">GlintFMPairParams</span> with <span class="extype" name="org.apache.spark.ml.util.MLWritable">MLWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@GlintFMPairModelextendsModel[org.apache.spark.ml.recommendation.GlintFMPairModel]withGlintFMPairParamswithMLWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Model fitted by <a href="GlintFMPair.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPair">GlintFMPair</a>.</p><div class="fullcomment"><div class="comment cmt"><p>Model fitted by <a href="GlintFMPair.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPair">GlintFMPair</a>.</p><p>For simplicity, this implementation uses the parameter servers for recommendation.
+Real use cases will require a different implementation which exports the linear weights and the latent factors,
+uses approaches like locality-sensitive hashing for recommendation in sublinear time
+and does not use parameter servers at recommendation time.
+</p></div></div>
+    </li><li name="org.apache.spark.ml.recommendation.KNN" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="KNNextendsKNNRecommender"></a>
+      <a id="KNN:KNN"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="KNN.html"><span class="name">KNN</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.recommendation.KNNRecommender">KNNRecommender</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@KNNextendsKNNRecommender" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Collaborative filtering through user-based k-nearest neighbours.</p>
+    </li><li name="org.apache.spark.ml.recommendation.PopRank" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="PopRankextendsEstimator[org.apache.spark.ml.recommendation.PopRankModel]withPopRankParamswithDefaultParamsWritable"></a>
+      <a id="PopRank:PopRank"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="PopRank.html"><span class="name">PopRank</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Estimator">Estimator</span>[<a href="PopRankModel.html" class="extype" name="org.apache.spark.ml.recommendation.PopRankModel">PopRankModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.PopRankParams">PopRankParams</span> with <span class="extype" name="org.apache.spark.ml.util.DefaultParamsWritable">DefaultParamsWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@PopRankextendsEstimator[org.apache.spark.ml.recommendation.PopRankModel]withPopRankParamswithDefaultParamsWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Popularity ranking recommender.</p>
+    </li><li name="org.apache.spark.ml.recommendation.PopRankModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="PopRankModelextendsModel[org.apache.spark.ml.recommendation.PopRankModel]withPopRankParamswithMLWritable"></a>
+      <a id="PopRankModel:PopRankModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="PopRankModel.html"><span class="name">PopRankModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Model">Model</span>[<a href="PopRankModel.html" class="extype" name="org.apache.spark.ml.recommendation.PopRankModel">PopRankModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.PopRankParams">PopRankParams</span> with <span class="extype" name="org.apache.spark.ml.util.MLWritable">MLWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@PopRankModelextendsModel[org.apache.spark.ml.recommendation.PopRankModel]withPopRankParamswithMLWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Model fitted by <a href="PopRank.html" class="extype" name="org.apache.spark.ml.recommendation.PopRank">PopRank</a>.</p>
+    </li><li name="org.apache.spark.ml.recommendation.ResizeVector" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="ResizeVectorextendsUDF2[org.apache.spark.ml.linalg.SparseVector,org.apache.spark.ml.linalg.SparseVector,org.apache.spark.ml.linalg.SparseVector]"></a>
+      <a id="ResizeVector:ResizeVector"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="ResizeVector.html"><span class="name">ResizeVector</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.sql.api.java.UDF2">UDF2</span>[<span class="extype" name="org.apache.spark.ml.linalg.SparseVector">SparseVector</span>, <span class="extype" name="org.apache.spark.ml.linalg.SparseVector">SparseVector</span>, <span class="extype" name="org.apache.spark.ml.linalg.SparseVector">SparseVector</span>]</span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@ResizeVectorextendsUDF2[org.apache.spark.ml.linalg.SparseVector,org.apache.spark.ml.linalg.SparseVector,org.apache.spark.ml.linalg.SparseVector]" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">UDF to resize a sparse vector to the same size as another sparse vector
+</p>
+    </li><li name="org.apache.spark.ml.recommendation.SAGH" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="SAGHextendsEstimator[org.apache.spark.ml.recommendation.SAGHModel]withSAGHParamswithDefaultParamsWritable"></a>
+      <a id="SAGH:SAGH"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="SAGH.html"><span class="name">SAGH</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Estimator">Estimator</span>[<a href="SAGHModel.html" class="extype" name="org.apache.spark.ml.recommendation.SAGHModel">SAGHModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.SAGHParams">SAGHParams</span> with <span class="extype" name="org.apache.spark.ml.util.DefaultParamsWritable">DefaultParamsWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@SAGHextendsEstimator[org.apache.spark.ml.recommendation.SAGHModel]withSAGHParamswithDefaultParamsWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Same-Artist Greatest Hits recommender.</p>
+    </li><li name="org.apache.spark.ml.recommendation.SAGHModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="SAGHModelextendsModel[org.apache.spark.ml.recommendation.SAGHModel]withSAGHParamswithMLWritable"></a>
+      <a id="SAGHModel:SAGHModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="SAGHModel.html"><span class="name">SAGHModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Model">Model</span>[<a href="SAGHModel.html" class="extype" name="org.apache.spark.ml.recommendation.SAGHModel">SAGHModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation.SAGHParams">SAGHParams</span> with <span class="extype" name="org.apache.spark.ml.util.MLWritable">MLWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@SAGHModelextendsModel[org.apache.spark.ml.recommendation.SAGHModel]withSAGHParamswithMLWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Model fitted by <a href="SAGH.html" class="extype" name="org.apache.spark.ml.recommendation.SAGH">SAGH</a>.</p>
+    </li><li name="org.apache.spark.ml.recommendation.TfIdfKNN" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="TfIdfKNNextendsEstimator[org.apache.spark.ml.recommendation.TfIdfKNNModel]with_TfIdfKNNwithDefaultParamsWritable"></a>
+      <a id="TfIdfKNN:TfIdfKNN"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="TfIdfKNN.html"><span class="name">TfIdfKNN</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Estimator">Estimator</span>[<a href="TfIdfKNNModel.html" class="extype" name="org.apache.spark.ml.recommendation.TfIdfKNNModel">TfIdfKNNModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation._TfIdfKNN">_TfIdfKNN</span> with <span class="extype" name="org.apache.spark.ml.util.DefaultParamsWritable">DefaultParamsWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@TfIdfKNNextendsEstimator[org.apache.spark.ml.recommendation.TfIdfKNNModel]with_TfIdfKNNwithDefaultParamsWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Collaborative filtering through user-based k-nearest neighbours, using TF-IDF weighting for user similarity.</p>
+    </li><li name="org.apache.spark.ml.recommendation.TfIdfKNNModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="TfIdfKNNModelextendsModel[org.apache.spark.ml.recommendation.TfIdfKNNModel]with_TfIdfKNNwithKNNRecommenderwithMLWritable"></a>
+      <a id="TfIdfKNNModel:TfIdfKNNModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="TfIdfKNNModel.html"><span class="name">TfIdfKNNModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.Model">Model</span>[<a href="TfIdfKNNModel.html" class="extype" name="org.apache.spark.ml.recommendation.TfIdfKNNModel">TfIdfKNNModel</a>] with <span class="extype" name="org.apache.spark.ml.recommendation._TfIdfKNN">_TfIdfKNN</span> with <span class="extype" name="org.apache.spark.ml.recommendation.KNNRecommender">KNNRecommender</span> with <span class="extype" name="org.apache.spark.ml.util.MLWritable">MLWritable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@TfIdfKNNModelextendsModel[org.apache.spark.ml.recommendation.TfIdfKNNModel]with_TfIdfKNNwithKNNRecommenderwithMLWritable" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">Model fitted by <a href="TfIdfKNN.html" class="extype" name="org.apache.spark.ml.recommendation.TfIdfKNN">TfIdfKNN</a>.</p>
+    </li><li name="org.apache.spark.ml.recommendation.WeighVector" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="WeighVectorextendsUDF2[org.apache.spark.ml.linalg.SparseVector,Double,org.apache.spark.ml.linalg.SparseVector]"></a>
+      <a id="WeighVector:WeighVector"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">class</span>
+      </span>
+      <span class="symbol">
+        <a href="WeighVector.html"><span class="name">WeighVector</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.sql.api.java.UDF2">UDF2</span>[<span class="extype" name="org.apache.spark.ml.linalg.SparseVector">SparseVector</span>, <span class="extype" name="scala.Double">Double</span>, <span class="extype" name="org.apache.spark.ml.linalg.SparseVector">SparseVector</span>]</span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@WeighVectorextendsUDF2[org.apache.spark.ml.linalg.SparseVector,Double,org.apache.spark.ml.linalg.SparseVector]" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      <p class="shortcomment cmt">UDF to multiply a sparse vector by a weight and divide it by the number of values
+</p>
+    </li></ol>
+            </div>
+
+        
+
+        <div id="values" class="values members">
+              <h3>Value Members</h3>
+              <ol><li name="org.apache.spark.ml.recommendation.GlintFMPair" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="GlintFMPair"></a>
+      <a id="GlintFMPair:GlintFMPair"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">object</span>
+      </span>
+      <span class="symbol">
+        <a href="GlintFMPair$.html"><span class="name">GlintFMPair</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.util.DefaultParamsReadable">DefaultParamsReadable</span>[<a href="GlintFMPair.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPair">GlintFMPair</a>] with <span class="extype" name="scala.Serializable">Serializable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@GlintFMPair" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      
+    </li><li name="org.apache.spark.ml.recommendation.GlintFMPairModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="GlintFMPairModel"></a>
+      <a id="GlintFMPairModel:GlintFMPairModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">object</span>
+      </span>
+      <span class="symbol">
+        <a href="GlintFMPairModel$.html"><span class="name">GlintFMPairModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.util.MLReadable">MLReadable</span>[<a href="GlintFMPairModel.html" class="extype" name="org.apache.spark.ml.recommendation.GlintFMPairModel">GlintFMPairModel</a>] with <span class="extype" name="scala.Serializable">Serializable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@GlintFMPairModel" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      
+    </li><li name="org.apache.spark.ml.recommendation.PopRankModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="PopRankModel"></a>
+      <a id="PopRankModel:PopRankModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">object</span>
+      </span>
+      <span class="symbol">
+        <a href="PopRankModel$.html"><span class="name">PopRankModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.util.MLReadable">MLReadable</span>[<a href="PopRankModel.html" class="extype" name="org.apache.spark.ml.recommendation.PopRankModel">PopRankModel</a>] with <span class="extype" name="scala.Serializable">Serializable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@PopRankModel" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      
+    </li><li name="org.apache.spark.ml.recommendation.SAGHModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="SAGHModel"></a>
+      <a id="SAGHModel:SAGHModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">object</span>
+      </span>
+      <span class="symbol">
+        <a href="SAGHModel$.html"><span class="name">SAGHModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.util.MLReadable">MLReadable</span>[<a href="SAGHModel.html" class="extype" name="org.apache.spark.ml.recommendation.SAGHModel">SAGHModel</a>] with <span class="extype" name="scala.Serializable">Serializable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@SAGHModel" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      
+    </li><li name="org.apache.spark.ml.recommendation.TfIdfKNNModel" visbl="pub" data-isabs="false" fullComment="no" group="Ungrouped">
+      <a id="TfIdfKNNModel"></a>
+      <a id="TfIdfKNNModel:TfIdfKNNModel"></a>
+      <h4 class="signature">
+      <span class="modifier_kind">
+        <span class="modifier"></span>
+        <span class="kind">object</span>
+      </span>
+      <span class="symbol">
+        <a href="TfIdfKNNModel$.html"><span class="name">TfIdfKNNModel</span></a><span class="result"> extends <span class="extype" name="org.apache.spark.ml.util.MLReadable">MLReadable</span>[<a href="TfIdfKNNModel.html" class="extype" name="org.apache.spark.ml.recommendation.TfIdfKNNModel">TfIdfKNNModel</a>] with <span class="extype" name="scala.Serializable">Serializable</span></span>
+      </span>
+      </h4><span class="permalink">
+      <a href="../../../../../index.html#org.apache.spark.ml.recommendation.package@TfIdfKNNModel" title="Permalink" target="_top">
+        <img src="../../../../../lib/permalink.png" alt="Permalink" />
+      </a>
+    </span>
+      
+    </li></ol>
+            </div>
+
+        
+
+        
+        </div>
+
+        <div id="inheritedMembers">
+        
+        
+        </div>
+
+        <div id="groupedMembers">
+        <div class="group" name="Ungrouped">
+              <h3>Ungrouped</h3>
+              
+            </div>
+        </div>
+
+      </div>
+
+      <div id="tooltip"></div>
+
+      <div id="footer">  </div>
+
+
+    </body>
+      </html>
