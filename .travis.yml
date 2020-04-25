@@ -12,8 +12,8 @@ jdk:
 
 before_deploy:
   # Record minimal build information via the Git user ident
-  - git config --global user.name "$USER$"
-  - git config --global user.email "$TRAVIS_BUILD_NUMBER@TRAVIS_COMMIT$"
+  - git config --global user.name "$USER"
+  - git config --global user.email "$TRAVIS_BUILD_NUMBER@TRAVIS_COMMIT"
   # Decrypt the secret deploy key using instructions from `travis encrypt-file`
   - openssl aes-256-cbc -K $encrypted_38b5cd286219_key -iv $encrypted_38b5cd286219_iv -in project/travis-deploy-key.enc -out project/travis-deploy-key -d
   - chmod 600 project/travis-deploy-key
