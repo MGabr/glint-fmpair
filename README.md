@@ -73,6 +73,10 @@ This package also contains some Spark ML baseline recommenders (`PopRank`, `SAGH
 as well as an `WeightHotEncoderEstimator` to one-hot encode features with weights other than one
 and to encode groups of features in a weighted way.
 
+More information can be found in the 
+[Scaladoc](https://mgabr.github.io/glint-fmpair/latest/api)
+of this project.
+
 Scala examples can be found in the 
 [integration tests](https://github.com/MGabr/glint-fmpair/blob/master/src/it/scala/org/apache/spark/ml/recommendation/GlintFMPairSpec.scala) 
 and Python examples can be found in an 
