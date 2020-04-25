@@ -2,27 +2,26 @@ package org.apache.spark.ml.recommendation
 
 import java.io.{ObjectInputStream, ObjectOutputStream}
 
-import breeze.linalg.{rank => breezeRank, sum => breezeSum, _}
+import breeze.linalg.{sum => breezeSum, _}
 import breeze.numerics.sigmoid
 import com.typesafe.config._
 import glint.models.client.{BigFMPairMatrix, BigFMPairVector}
 import glint.{Client, FMPairArguments}
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.{SparkContext, TaskContext}
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.ml.linalg.{SparseVector, VectorUDT}
-import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
 import org.apache.spark.ml.param._
+import org.apache.spark.ml.param.shared.{HasMaxIter, HasPredictionCol, HasSeed, HasStepSize}
 import org.apache.spark.ml.recommendation.GlintFMPair.{Interaction, MetaData, SampledFeatures, SampledInteraction}
 import org.apache.spark.ml.util._
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.sql.api.java.UDF2
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
-import org.apache.spark.sql.expressions.{Aggregator, Window}
+import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, FloatType, IntegerType, StructType}
-import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Encoders, Row, SparkSession}
-import org.apache.spark.util.collection.PrimitiveKeyOpenHashMap
+import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
+import org.apache.spark.{SparkContext, TaskContext}
 import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap
 import spire.implicits.cforRange
 
@@ -130,8 +129,8 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
    * "exp" means sampling negative items with probability proportional to their exponential popularity distribution,
    * as proposed in LambdaFM.
    *
-   * "crossbatch" means sampling negative items uniformly, but using crossbatch-BPR loss,
-   * as proposed in my masters thesis
+   * "crossbatch" means sampling negative items uniformly, but sharing them across the mini-batch
+   * as crossbatch-BPR loss, as proposed in my masters thesis.
    *
    * Default: "uniform"
    *
@@ -319,6 +318,17 @@ private[recommendation] trait GlintFMPairParams extends Params with HasMaxIter w
 }
 
 
+/**
+ * Distributed pairwise factorization machine / LightFM.
+ *
+ * Pairwise factorization machines are trained on implicit-feedback training instances
+ * to rank all items with observed user-item training instances above all other items for the user,
+ * using bayesian personalized ranking.
+ *
+ * This is an implementation using Glint parameter servers with custom methods for network-efficient training.
+ * A Spark application with the parameter servers has to be started beforehand
+ * and the host of the parameter server master given as parameter to this implementation.
+ */
 class GlintFMPair(override val uid: String)
   extends Estimator[GlintFMPairModel] with GlintFMPairParams with DefaultParamsWritable {
 
@@ -1106,6 +1116,20 @@ object GlintFMPair extends DefaultParamsReadable[GlintFMPair] {
   }
 }
 
+/**
+ * Model fitted by [[org.apache.spark.ml.recommendation.GlintFMPair GlintFMPair]].
+ *
+ * For simplicity, this implementation uses the parameter servers for recommendation.
+ * Real use cases will require a different implementation which exports the linear weights and the latent factors,
+ * uses approaches like locality-sensitive hashing for recommendation in sublinear time
+ * and does not use parameter servers at recommendation time.
+ *
+ * @param uid The UID
+ * @param bcItemFeatures The broadcasted item features mapping
+ * @param linear The linear weights vector on the parameter servers
+ * @param factors The latent factors matrix on the parameter servers
+ * @param client The client to the parameter servers
+ */
 class GlintFMPairModel private[ml](override val uid: String,
                                    private[spark] val bcItemFeatures: Broadcast[Array[SparseVector]],
                                    private[spark] val linear: BigFMPairVector,

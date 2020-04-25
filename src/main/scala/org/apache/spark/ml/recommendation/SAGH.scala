@@ -72,6 +72,9 @@ private[recommendation] trait SAGHParams extends Params with HasPredictionCol {
   def getFilterUserItems: Boolean = $(filterUserItems)
 }
 
+/**
+ * Same-Artist Greatest Hits recommender.
+ */
 class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParams with DefaultParamsWritable {
 
   def this() = this(Identifiable.randomUID("sagh"))
@@ -113,6 +116,9 @@ class SAGH(override val uid: String) extends Estimator[SAGHModel] with SAGHParam
   }
 }
 
+/**
+ * Model fitted by [[org.apache.spark.ml.recommendation.SAGH SAGH]].
+ */
 class SAGHModel private[ml](override val uid: String, val itemCounts: DataFrame)
   extends Model[SAGHModel] with SAGHParams with MLWritable {
 

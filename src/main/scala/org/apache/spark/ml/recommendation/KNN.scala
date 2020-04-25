@@ -98,7 +98,9 @@ private[recommendation] trait KNNRecommender extends KNNParams {
   }
 }
 
-
+/**
+ * Collaborative filtering through user-based k-nearest neighbours.
+ */
 class KNN(override val uid: String) extends KNNRecommender {
 
   def this() = this(Identifiable.randomUID("knn"))
@@ -112,7 +114,7 @@ class KNN(override val uid: String) extends KNNRecommender {
    * Returns top numItems items recommended for each user id in the input data set
    *
    * @param queryDataset The dataset containing a column of user ids. The column name must match userCol
-   * @param fitDataset
+   * @param fitDataset The dataset of neighbours, containing a column of user ids and a column of item ids
    * @param numItems The maximum number of recommendations for each user
    * @return A dataframe of (userCol: Int, recommendations), where recommendations are stored
    *         as an array of (score: Float, itemCol: Int) rows. Or if exploded
@@ -162,6 +164,9 @@ private[recommendation] trait _TfIdfKNN extends KNNParams {
 }
 
 
+/**
+ * Collaborative filtering through user-based k-nearest neighbours, using TF-IDF weighting for user similarity.
+ */
 class TfIdfKNN(val uid: String) extends Estimator[TfIdfKNNModel] with _TfIdfKNN with DefaultParamsWritable {
 
   def this() = this(Identifiable.randomUID("tfidf-knn"))
@@ -194,7 +199,13 @@ class TfIdfKNN(val uid: String) extends Estimator[TfIdfKNNModel] with _TfIdfKNN 
   }
 }
 
-
+/**
+ * Model fitted by [[org.apache.spark.ml.recommendation.TfIdfKNN TfIdfKNN]].
+ *
+ * @param uid The UID
+ * @param idfDf The data frame with IDF weightings for all items
+ * @param userDf The data frame of all users and items the model was fitted on, and their TF-IDF weightings
+ */
 class TfIdfKNNModel(override val uid: String, val idfDf: DataFrame, val userDf: DataFrame)
   extends Model[TfIdfKNNModel] with _TfIdfKNN with KNNRecommender with MLWritable {
 

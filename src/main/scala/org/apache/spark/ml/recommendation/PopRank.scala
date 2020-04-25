@@ -59,6 +59,9 @@ private[recommendation] trait PopRankParams extends Params with HasPredictionCol
   def getFilterUserItems: Boolean = $(filterUserItems)
 }
 
+/**
+ * Popularity ranking recommender.
+ */
 class PopRank(override val uid: String) extends Estimator[PopRankModel] with PopRankParams with DefaultParamsWritable {
 
   def this() = this(Identifiable.randomUID("poprank"))
@@ -97,6 +100,9 @@ class PopRank(override val uid: String) extends Estimator[PopRankModel] with Pop
   }
 }
 
+/**
+ * Model fitted by [[org.apache.spark.ml.recommendation.PopRank PopRank]].
+ */
 class PopRankModel private[ml](override val uid: String, val itemCounts: DataFrame)
   extends Model[PopRankModel] with PopRankParams with MLWritable {
 
